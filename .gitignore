@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+venv/
+
+# Data (too large for git)
+data/*.tsv
+data/*.csv
+data/*.gz
+data/*.txt
+data/delta_parquet/
+
+# Model checkpoints
+checkpoints/
+mlruns/
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
