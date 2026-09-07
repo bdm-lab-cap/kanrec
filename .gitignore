@@ -28,3 +28,8 @@ notebooks/.ipynb_checkpoints/
 
 # OS
 .DS_Store
+.venv/
+.idea/
+kanrec.egg-info/
+dashboard/
+databricks/
