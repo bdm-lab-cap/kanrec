@@ -117,6 +117,35 @@ class TestGridCalibration:
         with pytest.warns(UserWarning, match="calibrate"):
             enc.get_spline_curves(0, n_points=20)
 
+    def test_is_calibrated_survives_checkpoint_roundtrip(self):
+        """
+        `grid` es un buffer registrado de PyTorch y SI lo restaura
+        load_state_dict(); un atributo normal como `_calibrated` NO. Usar el
+        flag hacia que todo modelo cargado de un checkpoint se reportara como
+        sin calibrar y emitiera un aviso espurio, pese a tener el grid bien
+        restaurado (detectado al ejecutar 05_symbolic_extraction en Fabric).
+        """
+        model = KANRecModel(num_numerical=2, cat_cardinalities=[5, 5],
+                             embedding_dim=4, kan_grid_size=10)
+        model.calibrate(torch.randn(200, 2) * 50)
+        assert model.numerical_encoder.is_calibrated(0)
+
+        state = model.state_dict()
+        restored = KANRecModel(num_numerical=2, cat_cardinalities=[5, 5],
+                                embedding_dim=4, kan_grid_size=10)
+        assert not restored.numerical_encoder.is_calibrated(0)
+        restored.load_state_dict(state)
+
+        assert restored.numerical_encoder.is_calibrated(0), (
+            "un modelo cargado de checkpoint se reporta como sin calibrar"
+        )
+        # Y por tanto NO debe emitir el aviso.
+        import warnings as _w
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            restored.numerical_encoder.get_spline_curves(0, n_points=20)
+        assert not caught, f"aviso espurio tras cargar checkpoint: {[str(x.message) for x in caught]}"
+
     def test_get_spline_curves_evaluates_within_calibrated_range(self):
         """
         Hallazgo A3: evaluar en un rango fijo [-3, 3] cuando el grid real

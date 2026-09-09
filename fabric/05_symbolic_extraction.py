@@ -126,14 +126,49 @@ def load_model_from_checkpoint(ckpt_path: str) -> KANRecModel:
     return model
 
 
-# ── Extraccion para las 3 semillas ─────────────────────────────────────────
-results_all_seeds = {}
-for seed in [42, 123, 256]:
-    ckpt = f"{CKPT_PATH}/best_kan-bspline_gs{KAN_GRID_SIZE}_s{seed}.pt"
-    if not os.path.exists(ckpt):
-        print(f"Missing: {ckpt}")
-        continue
+# ── Deteccion del origen de los checkpoints ────────────────────────────────
+# Este notebook puede correr sobre dos origenes distintos:
+#   - 04_model_comparison.py       -> escribe "best_kan-bspline_gs{N}_s{seed}.pt"
+#                                     con 3 semillas (42, 123, 256)
+#   - 04_model_comparison_TRIAL.py -> escribe "trial_kan-bspline_gs{N}_s{seed}.pt"
+#                                     con 1 sola semilla (42), escala reducida
+# Antes esto estaba hardcodeado al prefijo "best_" y a las 3 semillas, asi que
+# tras ejecutar solo el trial imprimia "Missing:" tres veces y generaba un
+# symbolic_results.json VACIO sin avisar de que no habia extraido nada.
+def discover_checkpoints(ckpt_dir: str, grid_size: int) -> list[tuple[int, str]]:
+    """Devuelve [(seed, ruta)] para los checkpoints de kan-bspline disponibles."""
+    if not os.path.isdir(ckpt_dir):
+        return []
+    found = []
+    for prefix in ("best", "trial"):
+        for seed in (42, 123, 256):
+            path = f"{ckpt_dir}/{prefix}_kan-bspline_gs{grid_size}_s{seed}.pt"
+            if os.path.exists(path):
+                found.append((seed, path))
+        if found:  # si hay checkpoints "best", se prefieren sobre los "trial"
+            print(f"Usando checkpoints con prefijo '{prefix}_' "
+                  f"({len(found)} semilla(s): {[s for s, _ in found]})")
+            if prefix == "trial":
+                print("  AVISO: son checkpoints del notebook TRIAL (escala "
+                      "reducida, 1 semilla). El informe de estabilidad entre "
+                      "semillas no sera significativo -- para eso hacen falta "
+                      "los checkpoints de la comparativa completa.")
+            return found
+    return []
 
+
+# ── Extraccion ─────────────────────────────────────────────────────────────
+checkpoints = discover_checkpoints(CKPT_PATH, KAN_GRID_SIZE)
+if not checkpoints:
+    raise FileNotFoundError(
+        f"No se encontro ningun checkpoint de kan-bspline con grid_size="
+        f"{KAN_GRID_SIZE} en {CKPT_PATH}.\n"
+        f"Ejecuta antes 04_model_comparison.py (o 04_model_comparison_TRIAL.py) "
+        f"y comprueba que KAN_GRID_SIZE aqui coincide con el grid_size usado alli."
+    )
+
+results_all_seeds = {}
+for seed, ckpt in checkpoints:
     print(f"\n{'='*60}\nSeed {seed}")
     model = load_model_from_checkpoint(ckpt)
 
@@ -164,10 +199,19 @@ for seed, results in results_all_seeds.items():
         if r["accepted"]:
             field_ops.setdefault(field, []).append(r["operator"])
 
+if not field_ops:
+    print("  (ninguna formula supero el umbral de R2 >= 0.90 -- no hay nada "
+          "que reportar aqui)")
 for field, ops in sorted(field_ops.items()):
     dominant, count = Counter(ops).most_common(1)[0]
     n_seeds = len(results_all_seeds)
     print(f"  {field:<6}: {dominant:<10} {count}/{n_seeds} seeds ({count/n_seeds:.0%})")
+
+if len(results_all_seeds) < 2:
+    print("\n  AVISO: solo hay 1 semilla disponible, asi que la columna "
+          "'stability' es trivialmente 100% y NO mide estabilidad real. "
+          "Para un informe de estabilidad con sentido hacen falta los 3 "
+          "checkpoints de la comparativa completa (04_model_comparison.py).")
 
 # ── Guardado de resultados ──────────────────────────────────────────────────
 os.makedirs("/lakehouse/default/Files/results", exist_ok=True)
@@ -175,6 +219,11 @@ n_seeds = len(results_all_seeds)
 with open("/lakehouse/default/Files/results/symbolic_results.json", "w") as f:
     json.dump({
         "kan_grid_size": KAN_GRID_SIZE,
+        # Trazabilidad: de que checkpoints salio este fichero. Sin esto era
+        # imposible saber si un symbolic_results.json venia de la corrida
+        # completa o del trial de escala reducida.
+        "source_checkpoints": [os.path.basename(p) for _, p in checkpoints],
+        "n_seeds": n_seeds,
         "results_by_seed": {
             str(k): {fld: v for fld, v in res.items()}
             for k, res in results_all_seeds.items()

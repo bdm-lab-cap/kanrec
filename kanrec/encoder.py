@@ -137,6 +137,21 @@ class KANNumericalEncoder(nn.Module):
         core = layer.grid[0, order:-order] if order > 0 else layer.grid[0]
         return core[0].item(), core[-1].item()
 
+    def is_calibrated(self, field_idx: int, tol: float = 1e-6) -> bool:
+        """
+        True if this field's grid has moved away from the library default
+        ``[-1, 1]``, i.e. calibrate() has run at some point.
+
+        Checks the actual grid buffer rather than a Python flag, because
+        ``grid`` is a registered PyTorch buffer and therefore IS restored by
+        ``load_state_dict()``, whereas a plain attribute like
+        ``self._calibrated`` is NOT. Using the flag made every model loaded
+        from a checkpoint report itself as uncalibrated and emit a spurious
+        warning, even though its grid was correctly restored.
+        """
+        low, high = self.field_range(field_idx)
+        return not (abs(low + 1.0) < tol and abs(high - 1.0) < tol)
+
     def get_spline_curves(
         self,
         field_idx: int,
@@ -154,11 +169,12 @@ class KANNumericalEncoder(nn.Module):
             x_grid:   [n_points]                 — input values
             y_curves: [n_points, embedding_dim]  — encoder outputs
         """
-        if not self._calibrated:
+        if not self.is_calibrated(field_idx):
             import warnings
             warnings.warn(
-                "get_spline_curves() called before calibrate(): evaluating "
-                "on the uncalibrated grid_range=[-1, 1]. Curves computed now "
+                "get_spline_curves() called on a field whose grid is still "
+                "the library default [-1, 1]: call calibrate() first, or load "
+                "a checkpoint trained after calibration. Curves computed now "
                 "reflect the base SiLU path outside that range, not the "
                 "learned spline.",
                 stacklevel=2,
