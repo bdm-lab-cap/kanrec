@@ -12,7 +12,10 @@ data/*.tsv
 data/*.csv
 data/*.gz
 data/*.txt
+data/dac/
 data/delta_parquet/
+data/stream_sample.jsonl
+data/symbolic_results.json
 
 # Model checkpoints
 checkpoints/
@@ -20,7 +23,6 @@ mlruns/
 
 # Jupyter
 .ipynb_checkpoints/
-notebooks/.ipynb_checkpoints/
 
 # IDE
 .vscode/
@@ -28,8 +30,3 @@ notebooks/.ipynb_checkpoints/
 
 # OS
 .DS_Store
-.venv/
-.idea/
-kanrec.egg-info/
-dashboard/
-databricks/

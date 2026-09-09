@@ -1,16 +1,14 @@
 """Tests for KANRecDataModule using synthetic Parquet files."""
 import json
 import os
-import tempfile
 import pytest
 import numpy as np
 import pandas as pd
 
 from kanrec.data import KANRecDataModule, CriteoDataset
 
-
-NUM_COLS = [f"I{i}" for i in range(1, 6)]   # 5 synthetic numerical fields
-CAT_COLS = [f"C{i}" for i in range(1, 4)]   # 3 synthetic categorical fields
+NUM_COLS = [f"I{i}" for i in range(1, 6)]    # 5 synthetic numerical fields
+CAT_COLS = [f"C{i}" for i in range(1, 27)]   # 26 categorical fields (same as production)
 
 
 def _make_parquet(path: str, n: int = 200):
@@ -26,15 +24,12 @@ def _make_parquet(path: str, n: int = 200):
 
 @pytest.fixture
 def tmp_data(tmp_path):
-    """Creates minimal train/val/test Parquet directories and feature_selection.json."""
     for split in ["train", "val", "test"]:
         _make_parquet(str(tmp_path / split))
-
     sel = {"selected": NUM_COLS, "excluded": [], "spearman_scores": {}}
     sel_path = str(tmp_path / "feature_selection.json")
     with open(sel_path, "w") as f:
         json.dump(sel, f)
-
     return tmp_path, sel_path
 
 
@@ -50,7 +45,7 @@ def test_dataset_item_shapes(tmp_data):
     x_num, x_cat, y = ds[0]
     assert x_num.shape == (len(NUM_COLS),)
     assert x_cat.shape == (len(CAT_COLS),)
-    assert y.shape     == ()
+    assert y.shape == ()
 
 
 def test_datamodule_dataloaders(tmp_data):
@@ -67,7 +62,7 @@ def test_datamodule_dataloaders(tmp_data):
     x_num, x_cat, y = batch
     assert x_num.shape[1] == len(NUM_COLS)
     assert x_cat.shape[1] == len(CAT_COLS)
-    assert y.shape[0]     == x_num.shape[0]
+    assert y.shape[0] == x_num.shape[0]
 
 
 def test_datamodule_cat_cardinalities(tmp_data):

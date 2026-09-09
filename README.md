@@ -4,173 +4,179 @@
 
 > TFM · Máster en Big Data & Data Engineering · Universidad Complutense de Madrid  
 > Autor: Pedro Antonio Martínez Sánchez  
-> Tutores: Jorge Centeno · Alberto González
+> Tutores: Jorge Centeno · Alberto González · Septiembre 2026
 
-[![CI](https://github.com/TU_USUARIO/kanrec/actions/workflows/ci.yml/badge.svg)](https://github.com/TU_USUARIO/kanrec/actions)
+[![CI](https://github.com/bdm-lab-cap/kanrec/actions/workflows/ci.yml/badge.svg)](https://github.com/bdm-lab-cap/kanrec/actions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![Microsoft Fabric](https://img.shields.io/badge/Microsoft-Fabric-blue.svg)](https://app.fabric.microsoft.com)
-[![MongoDB](https://img.shields.io/badge/MongoDB-7.0-green.svg)](https://www.mongodb.com/)
+[![MongoDB Atlas](https://img.shields.io/badge/MongoDB-Atlas-green.svg)](https://cloud.mongodb.com)
+[![Confluent Cloud](https://img.shields.io/badge/Confluent-Cloud-red.svg)](https://confluent.cloud)
 
 ---
 
-## Arquitectura
+## What is KAN-REC?
+
+KAN-REC replaces the discretisation step of **AutoDis** (KDD 2021) with a **Kolmogorov-Arnold Network (KAN) encoder** that maps each raw numerical feature to an embedding via a learnable B-spline — no buckets, no step discontinuities. After training, the spline curves are pruned and symbolically fitted, producing a **closed-form scoring formula** auditable by non-technical stakeholders:
+
+```
+ŷ ≈ f(I3, I11) where:
+  φ_I3(x)  ≈ −0.0735·exp(x) + 0.0378   [R²=0.931, stability 3/3 seeds]
+  φ_I11(x) ≈  0.1720·exp(x) − 0.1034   [R²=0.918, stability 3/3 seeds]
+```
+
+**AI Act relevance:** KAN-REC produces the intrinsic explanations that e-commerce recommendation systems must provide under EU Regulation 2024/1689 (Art. 13).
+
+---
+
+## Results
+
+| Encoder | Dataset | Test AUC | Log-loss | Seeds |
+|---------|---------|---------|---------|-------|
+| Raw normalisation | 100K bal. | 0.885 | 0.532 | 1 |
+| AutoDis (KDD 2021) | 100K bal. | 0.817 | 0.694 | 1 |
+| **KAN-REC (ours)** | **100K bal.** | **0.897 ± 0.002** | **0.366** | **3** |
+| KAN-REC (Colab GPU) | 8M natural | 0.8026 ± 0.0005 | 0.444 | 3 |
+
+KAN-REC supera a AutoDis en **+0.066 AUC** y **-0.33 log-loss** en comparativa controlada.
+
+Symbolic extraction: **10/13 fields** accept an operator with R² > 0.90. Fields I3 and I11 are **100% stable** across seeds. Exponential operator dominates all numerical fields.
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  FUENTES DE DATOS                                               │
-│  Criteo/Avazu CSV · Kafka (Docker) · Item Metadata API          │
-└──────────────┬───────────────┬──────────────────┬──────────────┘
-               ▼               ▼                  ▼
+│  SOURCES                                                        │
+│  Criteo CSV (10M) · Confluent Cloud (Kafka) · Item Metadata API │
+└──────────┬──────────────┬──────────────────┬───────────────────┘
+           ▼              ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  MICROSOFT FABRIC                                               │
+│  MICROSOFT FABRIC — workspace KAN-REC                           │
+│  01_spark_ingest_mlllib  → Delta Tables (8M/998K/1M rows)      │
+│  02_streaming_kafka      → Confluent → Eventstream → KQL+Delta  │
+│  03_api_ingest           → item_metadata (1,396 items)          │
+│  04_training_kanrec      → KAN model + MLflow experiments       │
+│  05_symbolic_extraction  → symbolic_results.json                │
+│  06_stream_processing    → streaming_processed + CTR metrics    │
+│  07_autodis_baseline     → AutoDis real (AUC=0.817)            │
+│  08_comparativa_encoders → Raw vs AutoDis vs KAN-REC           │
+│  09_mongodb_vector_search → embeddings KAN → Atlas $vectorSearch│
 │                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Real-Time Intelligence                                 │   │
-│  │  Eventstream (Kafka) → KQL Database → RT Dashboard      │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Data Engineering                                       │   │
-│  │  Spark MLlib (normalización + feature importance)       │   │
-│  │  Data Pipelines (orquestación)                          │   │
-│  │  OneLake / Delta Lake (feature store)                   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Data Science                                           │   │
-│  │  ML Experiments (MLflow integrado)                      │   │
-│  │  Checkpoints en OneLake                                 │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Data Activator                                         │   │
-│  │  Alerta automática si AUC < baseline − 0.005            │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Power BI (integrado en Fabric)                         │   │
-│  │  Curvas φ · Fórmula scoring · AUC · CTR Real-Time       │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │
-              ┌────────────────┴──────────────────┐
-              ▼                                   ▼
-┌─────────────────────┐               ┌──────────────────────┐
-│  Google Colab       │               │  Local (Mac)         │
-│  KAN encoder        │               │  MongoDB             │
-│  Symbolic extract.  │               │  Kafka Docker        │
-│  → OneLake          │               │  GitHub Actions CI   │
-└─────────────────────┘               └──────────────────────┘
+│  Real-Time Dashboard (KQL) · Power BI (3 pages)               │
+│  Data Activator (4 rules) · Data Pipelines (orchestration)     │
+└─────────────────────────────────────────────────────────────────┘
+         ▼                              ▼
+┌──────────────────┐       ┌───────────────────────────────────┐
+│  Google Colab    │       │  MongoDB Atlas (ClusterKanrec)    │
+│  GPU T4 14.6 GB  │       │  kanrec.symbolic_results          │
+│  8M rows         │       │  kanrec.model_alerts              │
+│  AUC=0.8026      │       │  kanrec.item_embeddings (VS 13D)  │
+└──────────────────┘       └───────────────────────────────────┘
 ```
 
 ---
 
-## Cobertura del máster (12/13 asignaturas)
+## Curricula coverage (12/13 subjects)
 
-| Componente | Tecnología | Asignatura |
-|-----------|-----------|-----------|
-| KAN encoder + extracción simbólica | PyTorch + EfficientKAN | Deep Learning — Eduardo Fernández |
-| Feature importance + normalización | Spark MLlib en Fabric | Spark — Pablo Villacorta |
-| Streaming de clics | Kafka (Docker) + Fabric Eventstream | Kafka — Jorge Centeno |
-| Feature store | OneLake + Delta Lake | Diseño de ingestas — Jorge Centeno |
-| Arquitectura de datos | Microsoft Fabric | Arquitecturas de datos — Jorge Centeno |
-| Orquestación cloud | Fabric Data Pipelines | Pipelines en Cloud — Alberto González |
-| NoSQL symbolic store | MongoDB | NoSQL — Marlon Cárdenas |
-| Modelado de resultados | Esquema Delta Tables | Modelado de datos — Gabriel Marín |
-| Tracking experimentos | Fabric ML Experiments | Machine Learning — Elena Gavilán |
-| Alertas MLOps | Data Activator (Reflex) | Productivización — Pablo Hidalgo |
-| Dashboard ejecutivo | Power BI integrado en Fabric | — |
-| CI/CD + packaging | GitHub Actions + pip | Aplicaciones en contenedores — Luis Piñón |
+| Component | Technology | Subject |
+|-----------|-----------|---------|
+| KAN encoder + symbolic extraction | PyTorch + EfficientKAN | Deep Learning |
+| Distributed normalisation | Spark MLlib in Fabric | Spark |
+| Real-time click stream | Confluent Cloud + Fabric Eventstream | Kafka |
+| Feature store | OneLake + Delta Lake | Data ingest design |
+| Multi-source architecture | Microsoft Fabric | Data architectures |
+| Cloud orchestration | Fabric Data Pipelines | Cloud pipelines |
+| Symbolic store + Vector Search | MongoDB Atlas | NoSQL |
+| Delta Table modelling | Delta Table schemas | Data modelling |
+| Experiment tracking | Fabric ML Experiments | Machine Learning |
+| CI/CD + pip packaging | GitHub Actions + setup.py | Productivisation |
+| Executive dashboard + Real-Time | Power BI + KQL Dashboard | — |
+| Containers + DevOps | Docker + GitHub Actions | Containers |
 
 ---
 
-## Quick start
-
-### 1. Entorno local
+## Quick start (local)
 
 ```bash
-git clone https://github.com/TU_USUARIO/kanrec.git && cd kanrec
-~/.pyenv/versions/3.11.9/bin/python -m venv .venv
-source .venv/bin/activate
-pip install torch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2
-pip install --no-deps /tmp/efficient-kan   # ver instalación en docs/
+# 1. Clone and setup (Intel Mac)
+git clone https://github.com/bdm-lab-cap/kanrec.git && cd kanrec
+~/.pyenv/versions/3.11.9/bin/python -m venv .venv && source .venv/bin/activate
+pip install torch==2.2.2 torchvision==0.17.2
+pip install git+https://github.com/Blealtan/efficient-kan.git@7b6ce1c --no-deps
+pip install numpy==1.26.4
 pip install -e ".[dev,streaming,api]"
+
+# 2. Start local services
+docker compose -f infra/docker-compose.yml up -d     # Kafka
+mongod --dbpath /usr/local/var/mongodb &              # MongoDB (optional)
+nohup uvicorn data.mock_api_server:app --port 8000 & # Mock API
+
+# 3. Run tests
+pytest tests/test_encoder.py tests/test_symbolic.py tests/test_data.py -v
+
+# 4. Send to Confluent Cloud
+python infra/kafka_producer_confluent.py --max-rows 500 --delay-ms 50
 ```
 
-### 2. Servicios locales
+## Microsoft Fabric setup
 
-```bash
-# Kafka
-docker compose -f infra/docker-compose.yml up -d
+1. Create workspace `KAN-REC` at https://app.fabric.microsoft.com
+2. Create Lakehouse `kanrec_lakehouse`
+3. Upload `data/criteo_10m.tsv` to `Files/raw/`
+4. Run notebooks in order: `01 → 02 → 03 → 04 → 05 → 06 → 07 → 08 → 09`
+5. Create Power BI report from `kanrec_lakehouse` SQL endpoint
 
-# MongoDB
-mongod --dbpath /usr/local/var/mongodb &
+## Google Colab (8M rows training)
 
-# Mock API
-nohup uvicorn data.mock_api_server:app --port 8000 > /tmp/api.log 2>&1 &
-```
-
-### 3. Microsoft Fabric
-
-1. Crear workspace `KAN-REC` en https://app.fabric.microsoft.com
-2. Crear Lakehouse `kanrec_lakehouse`
-3. Subir Criteo a `Files/raw/criteo_10m.tsv`
-4. Ejecutar notebooks en orden: `01 → 02 → 03 → 04`
-5. Descargar `Files/parquet/` a `data/delta_parquet/criteo/`
-
-### 4. Entrenamiento (Google Colab)
-
-Abre `notebooks/colab_training.ipynb` en Google Colab con GPU T4.
-Sigue las celdas en orden. Los checkpoints se guardan en Google Drive
-y se suben a OneLake con `fabric/upload_to_fabric.py`.
-
-### 5. Tests
-
-```bash
-pytest tests/ -v --tb=short
-```
+1. Upload `data/criteo_10m.tsv` to Google Drive `/kanrec/`
+2. Open `notebooks/kanrec_8M_training.ipynb` in Colab
+3. Activate GPU (T4 or A100)
+4. Run all cells
 
 ---
 
-## Estructura del repositorio
+## Repository structure
 
 ```
 kanrec/
-├── .github/workflows/ci.yml      # CI: pytest + MongoDB
+├── .github/workflows/ci.yml
 ├── data/
-│   ├── download_criteo.sh         # Descarga dataset
-│   └── mock_api_server.py         # FastAPI mock para metadata
+│   ├── download_criteo.sh
+│   ├── feature_selection.json
+│   └── mock_api_server.py
 ├── infra/
-│   ├── docker-compose.yml         # Kafka + Zookeeper
-│   └── kafka_producer.py          # Replay Criteo → Kafka
-├── fabric/                        # Notebooks Microsoft Fabric
-│   ├── 01_spark_ingest_mlllib.py  # MLlib normalización + feature importance
-│   ├── 02_eventstream_kafka.py    # Structured Streaming desde Eventstream
-│   ├── 03_api_ingest.py           # Pull API → OneLake
-│   ├── 04_feature_store.py        # Consolidación + exportación Parquet
-│   ├── 05_ml_experiments.py       # Registro en Fabric ML Experiments
-│   ├── 06_data_activator_setup.py # Configuración alertas AUC
-│   └── upload_to_fabric.py        # SDK para subir resultados de Colab
-├── powerbi/
-│   └── README.md                  # Setup Power BI + medidas DAX
-├── kanrec/                        # Paquete Python instalable
+│   ├── docker-compose.yml
+│   ├── kafka_producer.py          # Docker Kafka producer
+│   └── kafka_producer_confluent.py # Confluent Cloud producer
+├── fabric/                        # Microsoft Fabric notebooks
+│   ├── 01_spark_ingest_mlllib.py
+│   ├── 02_streaming_kafka.py
+│   ├── 03_api_ingest.py
+│   ├── 04_training_kanrec.py
+│   ├── 05_symbolic_extraction.py
+│   ├── 06_stream_processing.py
+│   ├── 07_autodis_baseline.py
+│   ├── 08_comparativa_encoders.py
+│   └── 09_mongodb_vector_search.py
+├── kanrec/                        # Installable Python package
 │   ├── encoder.py                 # KANNumericalEncoder
 │   ├── model.py                   # KANRecModel
 │   ├── data.py                    # KANRecDataModule
 │   ├── symbolic.py                # SymbolicExtractor
 │   ├── faithfulness.py            # FaithfulnessEvaluator
-│   └── mongo_store.py             # MongoSymbolicStore
+│   └── mongo_store.py             # MongoSymbolicStore (Atlas)
 ├── experiments/
-│   ├── train.py                   # Entrenamiento principal
-│   ├── symbolic_extraction.py     # Extracción + MongoDB
-│   └── run_all.sh                 # Reproducción completa
+│   ├── train.py
+│   ├── symbolic_extraction.py
+│   ├── mongodb_import.py          # Import results to MongoDB Atlas
+│   └── run_all.sh
 ├── notebooks/
-│   └── colab_training.ipynb       # Notebook Google Colab listo para usar
+│   └── kanrec_8M_training.ipynb  # Google Colab GPU training
 ├── tests/
-│   ├── test_encoder.py
-│   ├── test_symbolic.py
-│   ├── test_mongo_store.py
-│   └── test_data.py
+│   ├── test_encoder.py   (5/5 ✅)
+│   ├── test_symbolic.py  (6/6 ✅)
+│   └── test_data.py      (4/4 ✅)
 ├── setup.py
 ├── requirements.txt
 └── README.md
@@ -178,25 +184,17 @@ kanrec/
 
 ---
 
-## Datasets
-
-| Dataset | Filas | Fuente |
-|---------|-------|--------|
-| Criteo Display Advertising | 45M | [Kaggle](https://www.kaggle.com/datasets/mrkmakr/criteo-dataset) |
-| Avazu CTR | 40M | [Kaggle](https://www.kaggle.com/c/avazu-ctr-prediction) |
-
----
-
-## Referencias
+## References
 
 - Guo et al. (2021). **AutoDis**. KDD 2021. [arXiv:2012.08986](https://arxiv.org/abs/2012.08986)
 - Liu et al. (2024). **KAN**. [arXiv:2404.19756](https://arxiv.org/abs/2404.19756)
+- Liu et al. (2024). **KAN 2.0**. [arXiv:2408.10205](https://arxiv.org/abs/2408.10205)
 - Luo et al. (2024). **EfficientKAN**. [GitHub](https://github.com/blealtan/efficient-kan)
 - Yang et al. (2025). **ShapKAN**. [arXiv:2510.01663](https://arxiv.org/abs/2510.01663)
 - European Parliament (2024). **AI Act** — Regulation EU 2024/1689.
 
 ---
 
-## Licencia
+## License
 
 MIT
