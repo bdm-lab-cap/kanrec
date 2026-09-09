@@ -2,14 +2,17 @@ from setuptools import setup, find_packages
 
 setup(
     name="kanrec",
-    version="0.2.0",
+    version="0.3.0",
     description="KAN-based continuous numerical encoder for CTR recommendation with symbolic scoring extraction",
     author="Pedro Antonio Martínez Sánchez",
     python_requires=">=3.11",
     packages=find_packages(),
+    include_package_data=True,
+    # efficient-kan is NOT published on PyPI (see kanrec/vendor/efficient_kan.py
+    # for the vendored, license-attributed copy). It used to be listed here,
+    # which made `pip install -e .` fail for anyone cloning the repository.
     install_requires=[
         "torch>=2.2.0",
-        "efficient-kan>=0.1.0",
         "scipy>=1.12.0",
         "scikit-learn>=1.4.0",
         "mlflow>=2.11.0",

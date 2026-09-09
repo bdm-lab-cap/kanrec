@@ -1,25 +1,57 @@
 # Microsoft Fabric Notebook — 05_symbolic_extraction
 # Extracts symbolic scoring rules from trained KAN-REC models.
-# Run AFTER 04_training_kanrec. Attach kanrec_lakehouse before running.
+# Run AFTER 04_model_comparison. Attach kanrec_lakehouse before running.
+#
+# Requiere el paquete kanrec instalado en esta sesion:
+#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+#
+# Fixes aplicados (auditoria de tribunal):
+#
+#   B5 — Este notebook redefinia KANNumericalEncoder/KANRecModel de forma
+#        LOCAL, con una arquitectura de interaccion distinta a la que de
+#        verdad entrenaron los notebooks de entrenamiento. Como resultado,
+#        load_state_dict() lanzaba una excepcion de claves incompatibles
+#        contra los checkpoints reales — este script, tal como estaba, no
+#        podia ejecutarse contra los resultados reales del TFM.
+#        Ahora se importa `from kanrec.model import KANRecModel`: una unica
+#        definicion, la misma que entrena 04_model_comparison.
+#
+#   A3 — get_spline_curves evaluaba siempre en [-3, 3], una ventana fija
+#        que para casi todos los campos cae fuera del rango donde el
+#        grid del spline esta activo. Como el buffer `grid` de cada KAN se
+#        guarda dentro del checkpoint (es un buffer registrado de PyTorch),
+#        cargar el checkpoint restaura tambien la calibracion — y
+#        get_spline_curves (ya corregido en el paquete) evalua sobre esa
+#        misma calibracion, no sobre una ventana arbitraria.
+#
+#   (pendiente, fuera del alcance de este paso — hallazgo A7): la formula
+#   ajustada aqui describe UNA de las `embedding_dim` dimensiones del
+#   embedding del campo, no la funcion de scoring completa. Este notebook
+#   sigue documentando eso mismo mas abajo; la metrica de fidelidad
+#   (sustituir phi_j dentro del modelo y medir la caida de AUC) es tarea
+#   del siguiente paso (interpretabilidad), no de este.
 
-# CELL 1: Install
-# %pip install torch==2.2.2
-# %pip install git+https://github.com/Blealtan/efficient-kan.git@7b6ce1c --no-deps
-# %pip install scipy numpy==1.26.4
-
-import json, os, torch
+import json, os
 import numpy as np
-import torch.nn as nn
-import pandas as pd
+import torch
 from scipy.optimize import curve_fit
 from collections import Counter
-from efficient_kan import KAN
+
+from kanrec.model import KANRecModel
 
 CKPT_PATH = "/lakehouse/default/Files/checkpoints"
 with open("/lakehouse/default/Files/config/feature_selection.json") as f:
     sel = json.load(f)
 NUMERICAL_COLS   = sel["selected"]
 CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
+
+# Grid size usado en la comparativa principal (04_model_comparison, CELDA 4
+# la deja en su valor por defecto = 10). Si cambias el default alli, cambia
+# tambien aqui: el buffer `grid` que se restaura al cargar el checkpoint
+# tiene una forma que depende de grid_size, asi que hay que instanciar el
+# modelo con el MISMO grid_size antes de cargar los pesos.
+KAN_GRID_SIZE = 10
+EMBEDDING_DIM = 16
 
 # Operator library
 OPERATOR_LIBRARY = {
@@ -37,38 +69,17 @@ FORMULA_TEMPLATES = {
     "inverse": "{a}/(|x|+ε) + {b}", "sigmoid": "{a}·σ(x) + {b}", "linear": "{a}·x + {b}",
 }
 
-# Model definition (same as training)
-class KANNumericalEncoder(nn.Module):
-    def __init__(self, num_fields, embedding_dim=16, grid_size=5, spline_order=3):
-        super().__init__()
-        self.field_kans = nn.ModuleList([
-            KAN(layers_hidden=[1, embedding_dim], grid_size=grid_size, spline_order=spline_order)
-            for _ in range(num_fields)])
-    def forward(self, x):
-        return torch.cat([kan(x[:, j:j+1]).unsqueeze(1) for j, kan in enumerate(self.field_kans)], dim=1)
-    def get_spline_curves(self, field_idx, n_points=300):
-        x_grid = torch.linspace(-3.0, 3.0, n_points).unsqueeze(1)
-        with torch.no_grad(): y = self.field_kans[field_idx](x_grid)
-        return x_grid.squeeze(), y
-    def get_edge_norms(self):
-        return [sum(p.abs().sum().item() for p in kan.parameters()) for kan in self.field_kans]
 
-class KANRecModel(nn.Module):
-    def __init__(self, num_numerical, cat_cardinalities, embedding_dim=16, grid_size=5, spline_order=3):
-        super().__init__()
-        self.numerical_encoder = KANNumericalEncoder(num_numerical, embedding_dim, grid_size, spline_order)
-        self.cat_embeddings = nn.ModuleList([nn.Embedding(card, embedding_dim, padding_idx=0) for card in cat_cardinalities])
-        total_fields = num_numerical + len(cat_cardinalities)
-        self.interaction = nn.Sequential(nn.Linear(total_fields * embedding_dim, 256), nn.ReLU(), nn.Dropout(0.1), nn.Linear(256, 64), nn.ReLU())
-        self.head = nn.Sequential(nn.Linear(64, 1), nn.Sigmoid())
-    def forward(self, x_num, x_cat):
-        num_emb = self.numerical_encoder(x_num)
-        cat_embs = [emb(x_cat[:, i].clamp(0, emb.num_embeddings-1)) for i, emb in enumerate(self.cat_embeddings)]
-        all_emb = torch.cat([num_emb, torch.stack(cat_embs, dim=1)], dim=1)
-        return self.head(self.interaction(all_emb.view(all_emb.size(0), -1)))
-    def entropy_reg_loss(self): return torch.tensor(0.0)
+def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) -> dict:
+    """
+    Ajusta la libreria de operadores sobre la dimension 0 del embedding del
+    campo, evaluada en el rango REAL calibrado del campo (no en [-3, 3]
+    fijo — ver KANNumericalEncoder.get_spline_curves).
 
-def fit_field(model, field_idx, r2_threshold=0.90):
+    NOTA (hallazgo A7, pendiente): esto describe una de las EMBEDDING_DIM
+    dimensiones de phi_j, no la funcion de scoring completa del modelo.
+    Ese alcance debe quedar explicito en la memoria, no solo aqui.
+    """
     x_grid, y_curves = model.numerical_encoder.get_spline_curves(field_idx)
     x_np, y_np = x_grid.numpy(), y_curves[:, 0].numpy()
     best = {"operator": None, "r2": -1.0, "params": None, "formula": "?", "accepted": False}
@@ -76,52 +87,109 @@ def fit_field(model, field_idx, r2_threshold=0.90):
         try:
             params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
             y_pred = fn(x_np, *params)
-            r2 = float(1 - np.sum((y_np - y_pred)**2) / (np.sum((y_np - y_np.mean())**2) + 1e-10))
+            r2 = float(1 - np.sum((y_np - y_pred) ** 2) / (np.sum((y_np - y_np.mean()) ** 2) + 1e-10))
             if r2 > best["r2"]:
                 a, b = round(float(params[0]), 4), round(float(params[1]), 4)
                 best = {"operator": name, "r2": r2, "params": [float(params[0]), float(params[1])],
                         "formula": FORMULA_TEMPLATES[name].format(a=a, b=b), "accepted": r2 >= r2_threshold}
-        except: continue
+        except Exception as exc:
+            print(f"    (aviso: el operador '{name}' no ajusto para el campo {field_idx}: {exc})")
+            continue
     return best
 
-# Extract for all seeds
+
+def load_model_from_checkpoint(ckpt_path: str) -> KANRecModel:
+    """
+    Reconstruye el modelo con la MISMA arquitectura usada al entrenar
+    (kanrec.model.KANRecModel, no una copia local) y carga los pesos —
+    incluido el buffer `grid` calibrado de cada campo.
+    """
+    state_dict = torch.load(ckpt_path, map_location="cpu")
+
+    # Los pesos de nn.Embedding tienen forma (card + 1, embedding_dim)
+    # porque KANRecModel construye nn.Embedding(card + 1, ...). Hay que
+    # restarle 1 antes de volver a pasarlo al constructor, o se crearia
+    # un embedding de una fila mas de la que el checkpoint tiene.
+    cat_cardinalities = [
+        state_dict[f"cat_embeddings.{i}.weight"].shape[0] - 1
+        for i in range(len(CATEGORICAL_COLS))
+    ]
+
+    model = KANRecModel(
+        num_numerical=len(NUMERICAL_COLS),
+        cat_cardinalities=cat_cardinalities,
+        embedding_dim=EMBEDDING_DIM,
+        kan_grid_size=KAN_GRID_SIZE,
+    )
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
+
+
+# ── Extraccion para las 3 semillas ─────────────────────────────────────────
 results_all_seeds = {}
 for seed in [42, 123, 256]:
-    ckpt = f"{CKPT_PATH}/best_kan-bspline_criteo_s{seed}.pt"
-    if not os.path.exists(ckpt): print(f"Missing: {ckpt}"); continue
-    print(f"\n{'='*50}\nSeed {seed}")
-    state_dict = torch.load(ckpt, map_location="cpu")
-    cat_cardinalities = [state_dict[f"cat_embeddings.{i}.weight"].shape[0] for i in range(26)]
-    model = KANRecModel(len(NUMERICAL_COLS), cat_cardinalities, 16, 5, 3)
-    model.load_state_dict(state_dict); model.eval()
+    ckpt = f"{CKPT_PATH}/best_kan-bspline_gs{KAN_GRID_SIZE}_s{seed}.pt"
+    if not os.path.exists(ckpt):
+        print(f"Missing: {ckpt}")
+        continue
+
+    print(f"\n{'='*60}\nSeed {seed}")
+    model = load_model_from_checkpoint(ckpt)
+
     norms = model.numerical_encoder.get_edge_norms()
     surviving = [j for j, n in enumerate(norms) if n >= np.percentile(norms, 20)]
-    print(f"L1 pruning: {len(surviving)}/{len(norms)} fields survive")
+    print(f"L1 pruning (norma del spline, no de todos los parametros): "
+          f"{len(surviving)}/{len(norms)} campos sobreviven")
+    # NOTA (hallazgo B2, pendiente): el umbral del percentil 20 elimina,
+    # por construccion, ~20% de los campos tengan o no importancia real
+    # para la prediccion. Un criterio basado en la caida de AUC al anular
+    # cada campo es mas defendible y es tarea del paso de interpretabilidad.
+
     seed_results = {}
     for j in surviving:
         r = fit_field(model, j)
         field = NUMERICAL_COLS[j]
         seed_results[field] = r
-        print(f"  {'✓' if r['accepted'] else '✗'} {field}: {r['operator']:8s} R²={r['r2']:.4f}  {r['formula']}")
+        mark = "✓" if r["accepted"] else "✗"
+        print(f"  {mark} {field}: {r['operator']:8s} R²={r['r2']:.4f}  {r['formula']}")
     results_all_seeds[seed] = seed_results
 
-# Stability report
+# ── Informe de estabilidad ──────────────────────────────────────────────────
 print("\nSTABILITY REPORT")
-print("="*50)
+print("=" * 60)
 field_ops = {}
 for seed, results in results_all_seeds.items():
     for field, r in results.items():
-        if r["accepted"]: field_ops.setdefault(field, []).append(r["operator"])
+        if r["accepted"]:
+            field_ops.setdefault(field, []).append(r["operator"])
 
 for field, ops in sorted(field_ops.items()):
     dominant, count = Counter(ops).most_common(1)[0]
-    print(f"  {field:<6}: {dominant:<10} {count}/3 seeds ({count/3:.0%})")
+    n_seeds = len(results_all_seeds)
+    print(f"  {field:<6}: {dominant:<10} {count}/{n_seeds} seeds ({count/n_seeds:.0%})")
 
-# Save results
+# ── Guardado de resultados ──────────────────────────────────────────────────
 os.makedirs("/lakehouse/default/Files/results", exist_ok=True)
+n_seeds = len(results_all_seeds)
 with open("/lakehouse/default/Files/results/symbolic_results.json", "w") as f:
-    json.dump({"results_by_seed": {str(k): {fld: {kk: vv for kk, vv in v.items() if kk != "params"} | {"params": v["params"]}
-               for fld, v in res.items()} for k, res in results_all_seeds.items()},
-               "stability": {f: {"dominant": Counter(ops).most_common(1)[0][0], "stability": Counter(ops).most_common(1)[0][1]/3}
-                             for f, ops in field_ops.items()}}, f, indent=2)
+    json.dump({
+        "kan_grid_size": KAN_GRID_SIZE,
+        "results_by_seed": {
+            str(k): {fld: v for fld, v in res.items()}
+            for k, res in results_all_seeds.items()
+        },
+        "stability": {
+            f: {"dominant": Counter(ops).most_common(1)[0][0],
+                "stability": Counter(ops).most_common(1)[0][1] / n_seeds}
+            for f, ops in field_ops.items()
+        },
+    }, f, indent=2)
 print("\nsymbolic_results.json saved to Files/results/")
+print(
+    "\nRECORDATORIO para la memoria (hallazgo A7): esta formula describe la "
+    "dimension 0 del embedding de cada campo, no la funcion de scoring "
+    "completa (que tambien pasa por las 26 categoricas, la interaccion y "
+    "la cabeza). La metrica de fidelidad que cuantifica esa brecha es "
+    "tarea del siguiente paso."
+)

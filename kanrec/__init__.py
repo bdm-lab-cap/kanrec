@@ -8,26 +8,35 @@ without pulling in torch, scipy or pymongo.
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 _LAZY: dict[str, str] = {
     "KANNumericalEncoder": ".encoder",
     "KANRecModel": ".model",
+    "CTRModel": ".model",
+    "InteractionMLP": ".model",
+    "RawNumericalEncoder": ".baselines",
+    "AutoDisNumericalEncoder": ".baselines",
+    "build_model": ".baselines",
     "SymbolicExtractor": ".symbolic",
     "FaithfulnessEvaluator": ".faithfulness",
     "MongoSymbolicStore": ".mongo_store",
     "get_secret": ".config",
     "atlas_uri": ".config",
     "confluent_config": ".config",
+    "apply_pipeline_and_unpack": ".spark_utils",
+    "random_sample": ".spark_utils",
 }
 
 __all__ = [*_LAZY, "__version__"]
 
 if TYPE_CHECKING:  # pragma: no cover - static analysers only
+    from .baselines import AutoDisNumericalEncoder, RawNumericalEncoder, build_model
     from .config import atlas_uri, confluent_config, get_secret
+    from .spark_utils import apply_pipeline_and_unpack, random_sample
     from .encoder import KANNumericalEncoder
     from .faithfulness import FaithfulnessEvaluator
-    from .model import KANRecModel
+    from .model import CTRModel, InteractionMLP, KANRecModel
     from .mongo_store import MongoSymbolicStore
     from .symbolic import SymbolicExtractor
 

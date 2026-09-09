@@ -4,7 +4,7 @@ persists to MongoDB, and evaluates faithfulness.
 
 Usage:
     python experiments/symbolic_extraction.py \
-        --checkpoint checkpoints/best_kan-bspline_criteo_s42.pt \
+        --checkpoint checkpoints/best_kan-bspline_criteo_gs10_s42.pt \
         --dataset criteo --seed 42
 """
 import argparse

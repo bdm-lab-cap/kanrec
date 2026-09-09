@@ -56,11 +56,10 @@ Symbolic extraction: **10/13 fields** accept an operator with R² > 0.90. Fields
 │  01_spark_ingest_mlllib  → Delta Tables (8M/998K/1M rows)      │
 │  02_streaming_kafka      → Confluent → Eventstream → KQL+Delta  │
 │  03_api_ingest           → item_metadata (1,396 items)          │
-│  04_training_kanrec      → KAN model + MLflow experiments       │
+│  04_model_comparison     → raw vs AutoDis vs KAN-REC, 3 seeds   │
+│                             (sustituye a 04/07/08; ver nota abajo)│
 │  05_symbolic_extraction  → symbolic_results.json                │
 │  06_stream_processing    → streaming_processed + CTR metrics    │
-│  07_autodis_baseline     → AutoDis real (AUC=0.817)            │
-│  08_comparativa_encoders → Raw vs AutoDis vs KAN-REC           │
 │  09_mongodb_vector_search → embeddings KAN → Atlas $vectorSearch│
 │                                                                 │
 │  Real-Time Dashboard (KQL) · Power BI (3 pages)               │
@@ -157,11 +156,10 @@ kanrec/
 │   ├── 01_spark_ingest_mlllib.py
 │   ├── 02_streaming_kafka.py
 │   ├── 03_api_ingest.py
-│   ├── 04_training_kanrec.py
+│   ├── 04_model_comparison.py     # sustituye a 04_training_kanrec,
+│   │                               # 07_autodis_baseline y 08_comparativa_encoders
 │   ├── 05_symbolic_extraction.py
 │   ├── 06_stream_processing.py
-│   ├── 07_autodis_baseline.py
-│   ├── 08_comparativa_encoders.py
 │   └── 09_mongodb_vector_search.py
 ├── kanrec/                        # Installable Python package
 │   ├── encoder.py                 # KANNumericalEncoder

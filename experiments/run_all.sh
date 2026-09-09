@@ -1,6 +1,15 @@
 #!/bin/bash
 # Reproduces the full results table in a single command.
 # Requires: GPU (optional), datasets in data/delta_parquet/, MongoDB running.
+#
+# Fix applied (2026-09, auditoría de tribunal — hallazgo B6):
+# --encoder raw / autodis / kan-bspline now build three DIFFERENT models
+# (see kanrec/baselines.py::build_model). Before this fix, train.py always
+# built a KANRecModel regardless of --encoder, so this script trained the
+# same model three times under three checkpoint names.
+#
+# The --encoder kan-rbf ablation and the `streamlit run dashboard/app.py`
+# hint below were removed: neither exists in this repository.
 set -e
 
 echo "══════════════════════════════════════════════════════"
@@ -12,35 +21,31 @@ SEEDS="42 123 256"
 DATASET="criteo"
 
 # ── 1. Baselines ──────────────────────────────────────────────────────────────
-echo "[1/5] Raw normalisation baseline..."
+echo "[1/4] Raw normalisation baseline..."
 for s in $SEEDS; do
     python experiments/train.py --encoder raw --dataset $DATASET --seed $s
 done
 
-echo "[2/5] AutoDis baseline..."
+echo "[2/4] AutoDis baseline..."
 for s in $SEEDS; do
     python experiments/train.py --encoder autodis --dataset $DATASET --seed $s
 done
 
-# ── 2. KAN encoder (primary) ──────────────────────────────────────────────────
-echo "[3/5] KAN encoder (B-spline, EfficientKAN)..."
+# ── 2. KAN encoder (primary contribution) ──────────────────────────────────────
+echo "[3/4] KAN encoder (B-spline, EfficientKAN)..."
 for s in $SEEDS; do
     python experiments/train.py --encoder kan-bspline --dataset $DATASET --seed $s
 done
 
-# ── 3. Ablation: basis ────────────────────────────────────────────────────────
-echo "[4/5] KAN encoder (RBF/FastKAN) — basis ablation..."
-python experiments/train.py --encoder kan-rbf --dataset $DATASET --seed 42
-
-# ── 4. Symbolic extraction (all seeds) ───────────────────────────────────────
-echo "[5/5] Symbolic extraction + MongoDB persistence..."
+# ── 3. Symbolic extraction (all seeds) ─────────────────────────────────────────
+echo "[4/4] Symbolic extraction + MongoDB persistence..."
 for s in $SEEDS; do
     python experiments/symbolic_extraction.py \
-        --checkpoint checkpoints/best_kan-bspline_${DATASET}_s${s}.pt \
+        --checkpoint checkpoints/best_kan-bspline_${DATASET}_gs10_s${s}.pt \
         --dataset $DATASET --seed $s
 done
 
-# ── 5. Stability report from MongoDB ─────────────────────────────────────────
+# ── 4. Stability report from MongoDB ───────────────────────────────────────────
 echo ""
 echo "══ Stability report (MongoDB) ══════════════════════"
 python - <<'PYEOF'
@@ -62,4 +67,3 @@ PYEOF
 
 echo ""
 echo "══ Done. View MLflow UI: mlflow ui --port 5000 ══════"
-echo "══ View dashboard:       streamlit run dashboard/app.py ══"
