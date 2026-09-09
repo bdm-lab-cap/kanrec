@@ -86,11 +86,21 @@ def train(config: dict) -> float:
         # sample of *normalised* training data drawn before any weight
         # update, so the spline grid matches the real distribution of each
         # field from the very first training step.
+        #
+        # 50k rows, not a fixed batch count (hallazgo verificado on the real
+        # 8M-row Criteo run in Fabric): I6 and I12 reach ~690 standard
+        # deviations after StandardScaler -- extreme tails. A ~5-10k row
+        # sample had low odds of including those outliers, and the
+        # calibrated grid could leave them uncovered (the same A3 problem,
+        # for those specific rows). Accumulating by ROW COUNT rather than
+        # batch count is also robust to whatever batch_size is configured.
         if hasattr(model, "calibrate"):
-            calib_batches = []
-            for i, (x_num, _, _) in enumerate(dm.train_dataloader()):
+            CALIB_ROWS = 50_000
+            calib_batches, calib_n = [], 0
+            for x_num, _, _ in dm.train_dataloader():
                 calib_batches.append(x_num)
-                if i >= 4:  # a handful of batches is enough to cover each field's range
+                calib_n += x_num.size(0)
+                if calib_n >= CALIB_ROWS:
                     break
             calib_sample = torch.cat(calib_batches, dim=0).to(device)
             model.calibrate(calib_sample)

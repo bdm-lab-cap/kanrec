@@ -183,10 +183,16 @@ def train_one_run(encoder_name: str, seed: int, max_epochs: int = 12,
     ).to(device)
 
     if hasattr(model, "calibrate"):
-        calib_batches = []
-        for i, (x_num, _, _) in enumerate(train_loader):
+        # 20k filas (escala trial reducida), no 3 lotes fijos -- mismo
+        # motivo que en fabric/04_model_comparison.py: colas extremas en
+        # I6-I13 (~690 desviaciones tipicas) que una muestra muy pequena
+        # podia dejar fuera del grid calibrado.
+        CALIB_ROWS = 20_000
+        calib_batches, calib_n = [], 0
+        for x_num, _, _ in train_loader:
             calib_batches.append(x_num)
-            if i >= 2:
+            calib_n += x_num.size(0)
+            if calib_n >= CALIB_ROWS:
                 break
         model.calibrate(torch.cat(calib_batches, dim=0).to(device))
 
