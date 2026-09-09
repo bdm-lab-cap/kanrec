@@ -30,7 +30,7 @@
 #   A6  — regularizacion de entropia > 0 de verdad (kanrec.encoder).
 #
 # Requiere el paquete kanrec instalado en esta sesion:
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@1724ed6023e056e7f6a4be8d95e65aa4aea984c8"
 #
 # IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
 # mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
@@ -44,7 +44,7 @@
 # ============================================================================
 # CELDA 1 — Instalacion e imports
 # ============================================================================
-# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@1724ed6023e056e7f6a4be8d95e65aa4aea984c8"
 # NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
 # los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
