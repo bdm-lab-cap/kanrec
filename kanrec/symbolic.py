@@ -16,11 +16,16 @@ from .mongo_store import MongoSymbolicStore
 # Operator library: each function takes (x, a, b)
 OPERATOR_LIBRARY: dict[str, Callable] = {
     "log":     lambda x, a, b: a * np.log(np.abs(x) + 1) + b,
-    "exp":     lambda x, a, b: a * np.exp(x) + b,
+    # np.clip en exp/sigmoid: sin el, valores de |x| grandes desbordan
+    # (RuntimeWarning: overflow encountered in exp). No cambia el ajuste --
+    # exp(700) ya es inf en float64 -- pero evita ruido en la salida y
+    # NaN silenciosos dentro de curve_fit. El clip a +-500 es holgado:
+    # exp(500) ~ 1e217, muy por encima de cualquier valor util aqui.
+    "exp":     lambda x, a, b: a * np.exp(np.clip(x, -500, 500)) + b,
     "square":  lambda x, a, b: a * x ** 2 + b,
     "sqrt":    lambda x, a, b: a * np.sqrt(np.abs(x)) + b,
     "inverse": lambda x, a, b: a / (np.abs(x) + 1e-6) + b,
-    "sigmoid": lambda x, a, b: a / (1 + np.exp(-x)) + b,
+    "sigmoid": lambda x, a, b: a / (1 + np.exp(np.clip(-x, -500, 500))) + b,
     "linear":  lambda x, a, b: a * x + b,
 }
 

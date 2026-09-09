@@ -56,11 +56,15 @@ EMBEDDING_DIM = 16
 # Operator library
 OPERATOR_LIBRARY = {
     "log":     lambda x, a, b: a * np.log(np.abs(x) + 1) + b,
-    "exp":     lambda x, a, b: a * np.exp(np.clip(x, -10, 10)) + b,
-    "square":  lambda x, a, b: a * x**2 + b,
+    # Mismo clip que kanrec/symbolic.py (+-500), no +-10: un clip agresivo a
+    # +-10 truncaba la curva DENTRO del rango de datos reales y podia falsear
+    # el ajuste. Ambos ficheros deben usar la MISMA libreria de operadores o
+    # pueden elegir operadores distintos sobre la misma curva (hallazgo C9).
+    "exp":     lambda x, a, b: a * np.exp(np.clip(x, -500, 500)) + b,
+    "square":  lambda x, a, b: a * x ** 2 + b,
     "sqrt":    lambda x, a, b: a * np.sqrt(np.abs(x)) + b,
     "inverse": lambda x, a, b: a / (np.abs(x) + 1e-6) + b,
-    "sigmoid": lambda x, a, b: a / (1 + np.exp(-x)) + b,
+    "sigmoid": lambda x, a, b: a / (1 + np.exp(np.clip(-x, -500, 500))) + b,
     "linear":  lambda x, a, b: a * x + b,
 }
 FORMULA_TEMPLATES = {

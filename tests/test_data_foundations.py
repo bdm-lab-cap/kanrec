@@ -316,3 +316,55 @@ class TestModelFactory:
             tuple(m.interaction.net[0].weight.shape) for m in models
         }
         assert len(shapes) == 1, f"los backbones no coinciden entre encoders: {shapes}"
+
+
+# ── C9: la libreria de operadores debe ser numericamente robusta ────────────
+
+class TestOperatorLibraryRobustness:
+    def test_no_overflow_on_extreme_inputs(self):
+        """
+        Detectado al ejecutar 05_symbolic_extraction en Fabric:
+        "RuntimeWarning: overflow encountered in exp" desde el operador
+        sigmoid. Los campos con colas pesadas (I6, I12 llegan a ~690
+        desviaciones tipicas en Criteo) alimentan valores donde np.exp
+        desborda. NumPy devuelve inf en vez de fallar, asi que curve_fit
+        seguia funcionando -- pero con inf/NaN silenciosos por dentro.
+        """
+        import warnings as _w
+
+        import numpy as np
+
+        from kanrec.symbolic import OPERATOR_LIBRARY
+
+        x = np.array([-800.0, -100.0, -3.0, 0.0, 3.0, 100.0, 800.0])
+        with _w.catch_warnings(record=True) as caught:
+            _w.simplefilter("always")
+            for name, fn in OPERATOR_LIBRARY.items():
+                y = fn(x, 1.0, 0.0)
+                assert np.isfinite(y).all(), f"operador '{name}' produce inf/NaN"
+        overflows = [str(c.message) for c in caught if "overflow" in str(c.message)]
+        assert not overflows, f"overflow sin proteger: {overflows}"
+
+    def test_operator_library_matches_the_fabric_notebook(self):
+        """
+        Hallazgo C9: el paquete y fabric/05_symbolic_extraction.py definian
+        'exp' de forma distinta (sin clip vs clip a +-10), asi que podian
+        elegir operadores distintos sobre la misma curva.
+        """
+        import re
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parent.parent
+        notebook = (repo / "fabric" / "05_symbolic_extraction.py").read_text(encoding="utf-8")
+        package = (repo / "kanrec" / "symbolic.py").read_text(encoding="utf-8")
+
+        for op in ["log", "exp", "square", "sqrt", "inverse", "sigmoid", "linear"]:
+            nb_match = re.search(rf'"{op}":\s+lambda.*', notebook)
+            pkg_match = re.search(rf'"{op}":\s+lambda.*', package)
+            assert nb_match and pkg_match, f"operador '{op}' no encontrado en ambos ficheros"
+            nb_line = nb_match.group(0).strip().rstrip(",")
+            pkg_line = pkg_match.group(0).strip().rstrip(",")
+            assert nb_line == pkg_line, (
+                f"el operador '{op}' difiere entre notebook y paquete:\n"
+                f"  notebook: {nb_line}\n  paquete : {pkg_line}"
+            )
