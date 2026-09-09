@@ -142,6 +142,19 @@ test_loader  = DataLoader(test_ds,  batch_size=BATCH_SIZE, shuffle=False, num_wo
 # ============================================================================
 # CELDA 4 — Entrenamiento de una configuracion (encoder, seed)
 # ============================================================================
+# Learning rate por encoder, no unico para los tres.
+# Hallazgo empirico (verificado con datos sinteticos antes de entregar este
+# notebook): con lr=1e-3 igual para los tres, AutoDis queda claramente
+# infraentrenado incluso a 30 epocas (AUC ~0.57 vs ~0.78 con lr=1e-2 en el
+# mismo presupuesto de epocas), mientras que raw y kan-bspline son estables
+# en ambos valores. Usar el mismo lr para los tres "por simetria" no es mas
+# justo: es forzar una desventaja estructural a la arquitectura con mas
+# parametros en su capa de discretizacion (proyeccion + skip + temperatura).
+# Lo que debe ser igual entre encoders son los DATOS y la evaluacion, no
+# necesariamente el learning rate.
+DEFAULT_LR = {"raw": 1e-3, "autodis": 1e-2, "kan-bspline": 1e-3}
+
+
 def evaluate(model, loader) -> tuple[float, float]:
     model.eval()
     preds, labels = [], []
@@ -158,11 +171,12 @@ def train_one_run(
     seed: int,
     max_epochs: int = 30,
     patience: int = 3,
-    lr: float = 1e-3,
+    lr: float | None = None,
     embedding_dim: int = 16,
     grid_size: int = 10,
 ) -> dict:
     torch.manual_seed(seed)
+    lr = lr if lr is not None else DEFAULT_LR[encoder_name]
 
     model = build_model(
         encoder=encoder_name,

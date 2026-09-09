@@ -94,3 +94,33 @@ print("Verificacion — I6..I13 (StandardScaler, esperado: mean~0, stddev~1):")
 train_t.select(STD_COLS).describe().show()
 
 print("Done.")
+
+
+# ============================================================================
+# CELDA 4 (opcional) — Exportar una muestra para Colab
+# ============================================================================
+# Por que existe esta celda: la capacidad trial de Fabric NO admite cola de
+# trabajos (un pico de uso se rechaza al momento con 430, no espera) y la
+# sesion de Spark se desaloja tras 20 min de inactividad. La comparativa
+# completa de encoders (3 semillas x 3 modelos + ablacion de grid_size) se
+# ejecuta por eso en Google Colab Pro (GPU, sin este limite), sobre esta
+# MISMA muestra ya normalizada por el pipeline de Fabric — no sobre datos
+# reprocesados aparte, para que ambos entornos vean exactamente los mismos
+# valores. Ver notebook de Colab: colab/kanrec_full_comparison.ipynb
+from kanrec.spark_utils import random_sample
+
+N_EXPORT_TRAIN, N_EXPORT_VAL, N_EXPORT_TEST = 500_000, 100_000, 100_000
+EXPORT_PATH = "/lakehouse/default/Files/exports"
+os.makedirs(EXPORT_PATH, exist_ok=True)
+
+for split_name, df_split, n in [
+    ("train", train_t, N_EXPORT_TRAIN),
+    ("val",   val_t,   N_EXPORT_VAL),
+    ("test",  test_t,  N_EXPORT_TEST),
+]:
+    sample = random_sample(df_split, n_rows=n, seed=42)
+    sample.toPandas().to_parquet(f"{EXPORT_PATH}/{split_name}_sample.parquet", index=False)
+    print(f"  {split_name}_sample.parquet escrito ({n:,} filas objetivo)")
+
+print(f"\nDescarga estos 3 ficheros desde el panel Files de Fabric "
+      f"({EXPORT_PATH}) y subelos a Colab (o a tu Google Drive).")

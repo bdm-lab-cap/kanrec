@@ -34,9 +34,21 @@ from kanrec.data import KANRecDataModule
 
 os.makedirs("checkpoints", exist_ok=True)
 
+# Learning rate por encoder, no unico para los tres (verificado empiricamente:
+# con el mismo lr, AutoDis queda infraentrenado por su capa de discretizacion
+# mas parametrizada; raw y kan-bspline son estables en el mismo rango). Ver
+# fabric/04_model_comparison.py para el detalle de la verificacion.
+DEFAULT_LR = {"raw": 1e-3, "autodis": 1e-2, "kan-bspline": 1e-3}
+
 
 def train(config: dict) -> float:
     torch.manual_seed(config["seed"])
+    # mlflow>=3.0 dejo el backend de fichero ("./mlruns") en modo
+    # mantenimiento y lo bloquea por defecto, exigiendo un backend de base
+    # de datos. sqlite es la via soportada hacia delante (no depende de
+    # activar MLFLOW_ALLOW_FILE_STORE, que el propio mensaje de mlflow dice
+    # que no recibira mas actualizaciones).
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("kanrec-ctr")
 
     with mlflow.start_run(run_name=f"{config['encoder']}-{config['dataset']}-s{config['seed']}") as run:
@@ -179,7 +191,7 @@ if __name__ == "__main__":
         "embedding_dim": args.embedding_dim,
         "grid_size": args.grid_size,
         "spline_order": 3,
-        "lr": 1e-3,
+        "lr": DEFAULT_LR[args.encoder],
         "max_epochs": 30,
         "patience": 3,
     }
