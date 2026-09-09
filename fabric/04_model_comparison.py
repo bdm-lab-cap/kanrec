@@ -31,12 +31,22 @@
 #
 # Requiere el paquete kanrec instalado en esta sesion:
 #   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+#
+# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
+# mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
+# propio, integrado con su plugin synapse.ml.mlflow. Si se instala OTRO
+# mlflow (via pip, o transitivamente al instalar kanrec en versiones
+# anteriores a la 0.3.2), el plugin de Fabric se rompe con:
+#   "wrapper() got an unexpected keyword argument 'expected_status'"
+# kanrec>=0.3.2 ya NO trae mlflow como dependencia obligatoria por esto
+# mismo. scikit-learn si viene con kanrec, no hace falta instalarlo aparte.
 
 # ============================================================================
 # CELDA 1 — Instalacion e imports
 # ============================================================================
 # %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
-# %pip install --quiet scikit-learn mlflow
+# NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
+# los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
 import json
 import os

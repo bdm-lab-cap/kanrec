@@ -5,6 +5,22 @@
 # every notebook in this project):
 #   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
 #
+# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): este
+# notebook NUNCA llama a mlflow ni lo instala aparte, pero rompia igual
+# con "wrapper() got an unexpected keyword argument 'expected_status'".
+# Causa: kanrec<0.3.2 declaraba mlflow como dependencia obligatoria, asi
+# que %pip install kanrec instalaba de forma TRANSITIVA un mlflow de PyPI
+# sin fijar, que sobreescribe el mlflow propio que Fabric ya trae
+# integrado con su plugin synapse.ml.mlflow. Fabric registra
+# automaticamente CADA ejecucion de notebook en su propio tracking de
+# experimentos (via synapse.ml.mlflow.default_experiment_registry), de
+# forma transparente -- por eso el fallo aparecia aunque este notebook no
+# use mlflow para nada. kanrec>=0.3.2 ya no arrastra mlflow (paso a un
+# extra [train], solo para entrenamiento local/Colab). Si tras el fix
+# sigue fallando, reinicia el kernel de PySpark: el mlflow incompatible
+# puede haber quedado instalado en el entorno pip aislado de la sesion
+# anterior y un simple re-run de la celda no lo revierte.
+#
 # Fix applied (2026-09, auditoria de tribunal - hallazgo A2)
 # --------------------------------------------------------------
 # StandardScaler used to write its output into a NEW vector column

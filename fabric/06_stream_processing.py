@@ -5,6 +5,11 @@
 # Requires the kanrec package installed in this session:
 #   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
 #
+# IMPORTANTE: kanrec<0.3.2 arrastraba mlflow como dependencia obligatoria,
+# lo que rompia el mlflow propio de Fabric (ver 01_spark_ingest_mlllib.py
+# para el detalle completo del fallo). kanrec>=0.3.2 ya no lo hace. Si tras
+# actualizar sigue fallando, reinicia el kernel de PySpark.
+#
 # Fix applied (2026-09, auditoria de tribunal - hallazgo A2, consistencia
 # batch/stream)
 # --------------------------------------------------------------------------

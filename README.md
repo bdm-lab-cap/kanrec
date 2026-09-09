@@ -105,10 +105,15 @@ git clone https://github.com/bdm-lab-cap/kanrec.git && cd kanrec
 cp .env.example .env      # fill in ATLAS_URI, CONFLUENT_API_KEY, CONFLUENT_API_SECRET
 
 ~/.pyenv/versions/3.11.9/bin/python -m venv .venv && source .venv/bin/activate
-pip install torch==2.2.2 torchvision==0.17.2
-pip install git+https://github.com/Blealtan/efficient-kan.git@7b6ce1c --no-deps
-pip install numpy==1.26.4
-pip install -e ".[dev,streaming,api]"
+
+# efficient-kan is vendored (kanrec/vendor/efficient_kan.py) since it is not
+# published on PyPI -- no separate git install needed anymore.
+pip install -e ".[dev,train,streaming,api]"
+# [train] adds mlflow, only needed to run experiments/train.py locally.
+# NEVER install [train] inside a Microsoft Fabric notebook: Fabric ships
+# its own mlflow, integrated with its synapse.ml.mlflow plugin, and
+# installing another mlflow there breaks it (see setup.py for the exact
+# error). Fabric notebooks should install kanrec bare, no extras.
 
 # 2. Start local services
 docker compose -f infra/docker-compose.yml up -d     # Kafka

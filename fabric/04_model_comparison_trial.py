@@ -35,7 +35,18 @@
 # Requiere el paquete kanrec instalado en esta sesion, FIJADO al mismo
 # commit que usa el notebook de Colab (para que ambos entornos ejecuten
 # exactamente el mismo codigo):
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@e0ade3e7bfd17b24675cc6c3f6dd6ada2dceccc2"
+#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+#
+# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
+# mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
+# propio, integrado con su plugin synapse.ml.mlflow. Si se instala OTRO
+# mlflow (via pip, o transitivamente al instalar kanrec en versiones
+# anteriores a la 0.3.2), el plugin de Fabric se rompe con:
+#   "wrapper() got an unexpected keyword argument 'expected_status'"
+# kanrec>=0.3.2 ya NO trae mlflow como dependencia obligatoria por esto
+# mismo. scikit-learn si viene con kanrec, no hace falta instalarlo aparte.
+# (Se usa @main temporalmente: repinear al commit exacto tras hacer
+#  push de este arreglo -- ver "Pasos a seguir".)
 
 # ============================================================================
 # CELDA 1 — Configuracion de sesion + instalacion + imports
@@ -45,8 +56,9 @@
 # Settings -> Pool -> elige un pool "Small" (o crea uno de 4 vCores).
 # Esto es lo que la comunidad de Fabric recomienda para capacidades trial.
 
-# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@e0ade3e7bfd17b24675cc6c3f6dd6ada2dceccc2"
-# %pip install --quiet scikit-learn mlflow
+# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
+# los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
 import json
 import os

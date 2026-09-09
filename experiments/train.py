@@ -2,6 +2,8 @@
 Main training script for KAN-REC.
 
 Usage:
+    pip install -e ".[train]"   # mlflow no es dependencia base de kanrec (ver setup.py):
+                                  # solo se necesita para ejecutar ESTE script localmente
     python experiments/train.py
     python experiments/train.py --encoder autodis --seed 123
     python experiments/train.py --encoder raw --seed 256
