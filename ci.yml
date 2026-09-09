@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # -- Gate 1: no credentials may ever reach the repository ------------------
+  # ── Gate 1: no credentials may ever reach the repository ──────────────────
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest
@@ -21,7 +21,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # -- Gate 2: tests ---------------------------------------------------------
+  # ── Gate 2: tests ─────────────────────────────────────────────────────────
   test:
     name: Tests
     runs-on: ubuntu-latest

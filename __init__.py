@@ -1,5 +1,5 @@
 """
-KAN-REC - continuous numerical encoding and symbolic scoring extraction.
+KAN-REC — continuous numerical encoding and symbolic scoring extraction.
 
 Public symbols are imported lazily (PEP 562) so that lightweight modules
 such as :mod:`kanrec.config` can be used from a Spark or Fabric notebook

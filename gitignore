@@ -6,6 +6,14 @@ build/
 .venv/
 venv/
 
+# Secrets — nunca versionar
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+kaggle.json
+
 # Data (too large for git)
 data/*.tsv
 data/*.csv
@@ -29,12 +37,3 @@ mlruns/
 
 # OS
 .DS_Store
-
-# Secrets - nunca versionar
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-kaggle.json
-.backup_paso*/

@@ -1,13 +1,20 @@
 """
 Import symbolic results and model metrics to MongoDB Atlas.
-Usage: python experiments/mongodb_import.py
+
+Usage:
+    cp .env.example .env      # rellena ATLAS_URI
+    python experiments/mongodb_import.py
+
+The connection string is never stored in this file: it is resolved by
+``kanrec.config`` from Azure Key Vault, the environment or ``.env``.
 
 MongoDB Atlas cluster: ClusterKanrec (M0 free)
 Collections: symbolic_results, model_alerts, item_embeddings
 """
 import json
-from pymongo.mongo_client import MongoClient
 from datetime import datetime, timezone
+
+from pymongo.mongo_client import MongoClient
 
 from kanrec.config import atlas_uri
 
