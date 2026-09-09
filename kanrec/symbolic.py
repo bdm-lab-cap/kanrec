@@ -16,11 +16,10 @@ from .mongo_store import MongoSymbolicStore
 # Operator library: each function takes (x, a, b)
 OPERATOR_LIBRARY: dict[str, Callable] = {
     "log":     lambda x, a, b: a * np.log(np.abs(x) + 1) + b,
-    # np.clip en exp/sigmoid: sin el, valores de |x| grandes desbordan
-    # (RuntimeWarning: overflow encountered in exp). No cambia el ajuste --
-    # exp(700) ya es inf en float64 -- pero evita ruido en la salida y
-    # NaN silenciosos dentro de curve_fit. El clip a +-500 es holgado:
-    # exp(500) ~ 1e217, muy por encima de cualquier valor util aqui.
+    # np.clip acota el exponente para que exp(x) no desborde por si solo.
+    # NO basta para eliminar todos los avisos: el desbordamiento real viene
+    # del producto a * exp(x) durante la optimizacion, y 'a' no esta acotado
+    # (ver el np.errstate en fit_field). El clip es una defensa parcial.
     "exp":     lambda x, a, b: a * np.exp(np.clip(x, -500, 500)) + b,
     "square":  lambda x, a, b: a * x ** 2 + b,
     "sqrt":    lambda x, a, b: a * np.sqrt(np.abs(x)) + b,
@@ -88,8 +87,19 @@ class SymbolicExtractor:
 
         for name, fn in OPERATOR_LIBRARY.items():
             try:
-                params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
-                y_pred = fn(x_np, *params)
+                # np.errstate: curve_fit explora deliberadamente valores
+                # extremos del parametro 'a' durante la optimizacion, donde
+                # a * exp(x) desborda float64. NumPy devuelve inf/NaN, el
+                # optimizador los descarta y sigue -- el aviso es ruido
+                # informativo, no un error. Acotar el exponente no lo evita:
+                # el desbordamiento viene del PRODUCTO a * exp(x), y 'a' no
+                # esta acotado. Se silencia el aviso y, a cambio, se descarta
+                # explicitamente cualquier ajuste que no sea finito.
+                with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                    params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
+                    y_pred = fn(x_np, *params)
+                if not np.all(np.isfinite(y_pred)) or not np.all(np.isfinite(params)):
+                    continue
                 ss_res = np.sum((y_np - y_pred) ** 2)
                 ss_tot = np.sum((y_np - y_np.mean()) ** 2) + 1e-10
                 r2     = float(1 - ss_res / ss_tot)

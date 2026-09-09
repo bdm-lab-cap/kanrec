@@ -57,9 +57,8 @@ EMBEDDING_DIM = 16
 OPERATOR_LIBRARY = {
     "log":     lambda x, a, b: a * np.log(np.abs(x) + 1) + b,
     # Mismo clip que kanrec/symbolic.py (+-500), no +-10: un clip agresivo a
-    # +-10 truncaba la curva DENTRO del rango de datos reales y podia falsear
-    # el ajuste. Ambos ficheros deben usar la MISMA libreria de operadores o
-    # pueden elegir operadores distintos sobre la misma curva (hallazgo C9).
+    # +-10 truncaba la curva DENTRO del rango de datos reales. Ambos ficheros
+    # deben usar la MISMA libreria de operadores (hallazgo C9).
     "exp":     lambda x, a, b: a * np.exp(np.clip(x, -500, 500)) + b,
     "square":  lambda x, a, b: a * x ** 2 + b,
     "sqrt":    lambda x, a, b: a * np.sqrt(np.abs(x)) + b,
@@ -89,8 +88,16 @@ def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) ->
     best = {"operator": None, "r2": -1.0, "params": None, "formula": "?", "accepted": False}
     for name, fn in OPERATOR_LIBRARY.items():
         try:
-            params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
-            y_pred = fn(x_np, *params)
+            # np.errstate: curve_fit explora deliberadamente valores extremos
+            # del parametro 'a', donde a * exp(x) desborda float64. NumPy
+            # devuelve inf/NaN, el optimizador los descarta y sigue -- el
+            # aviso es ruido, no un error. Acotar el exponente no lo evita:
+            # el desbordamiento viene del PRODUCTO, y 'a' no esta acotado.
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
+                y_pred = fn(x_np, *params)
+            if not np.all(np.isfinite(y_pred)) or not np.all(np.isfinite(params)):
+                continue
             r2 = float(1 - np.sum((y_np - y_pred) ** 2) / (np.sum((y_np - y_np.mean()) ** 2) + 1e-10))
             if r2 > best["r2"]:
                 a, b = round(float(params[0]), 4), round(float(params[1]), 4)
