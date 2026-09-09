@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="kanrec",
-    version="0.3.0",
+    version="0.3.1",
     description="KAN-based continuous numerical encoder for CTR recommendation with symbolic scoring extraction",
     author="Pedro Antonio Martínez Sánchez",
     python_requires=">=3.11",
@@ -16,9 +16,16 @@ setup(
         "scipy>=1.12.0",
         "scikit-learn>=1.4.0",
         "mlflow>=2.11.0",
-        "pandas>=2.2.0",
+        # <3.0.0: pandas 3.x rompe herramientas propias de Microsoft Fabric
+        # (ds-copilot exige pandas<3.0.0) al instalar kanrec en un notebook.
+        "pandas>=2.2.0,<3.0.0",
         "pyarrow>=15.0.0",
         "pymongo>=4.6.0",
+        # filelock no es una dependencia directa de kanrec: la arrastran
+        # torch y mlflow. Se fija aqui porque una version reciente rompe
+        # "nni" (herramienta de AutoML preinstalada en Microsoft Fabric,
+        # que exige filelock<3.12) al instalar kanrec en un notebook.
+        "filelock<3.12",
     ],
     extras_require={
         "dev": [
