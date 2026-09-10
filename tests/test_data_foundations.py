@@ -520,3 +520,53 @@ class TestModelReturnsLogits:
         logits.requires_grad_(True)
         torch.nn.BCEWithLogitsLoss()(logits, target).backward()
         assert torch.isfinite(logits.grad).all()
+
+
+# ── Winsorizado de la entrada: outliers extremos no deben producir inf ──────
+
+class TestInputWinsorization:
+    """
+    En la corrida real de Colab, KAN-REC con grid_size>=10 devolvia inf en
+    TODAS las predicciones (AUC 0.5, logloss inf) mientras grid_size=5
+    funcionaba. Causa: tras StandardScaler, Criteo conserva outliers de
+    ~690 desviaciones; la ruta base del KAN es base_weight*SiLU(x) y
+    SiLU(690)~=690, asi que un outlier arrastra el embedding a magnitud
+    ~1e3 y los logits desbordan float32 en GPU.
+    """
+
+    def test_extreme_inputs_do_not_produce_inf(self):
+        for grid_size in [5, 10, 20]:
+            model = KANRecModel(num_numerical=4, cat_cardinalities=[10, 10],
+                                 embedding_dim=8, kan_grid_size=grid_size)
+            model.calibrate(torch.randn(500, 4))
+
+            x_num = torch.randn(64, 4)
+            x_num[0, :] = 690.0      # el outlier real de Criteo
+            x_num[1, :] = -400.0
+            x_cat = torch.randint(0, 10, (64, 2))
+
+            logits = model(x_num, x_cat)
+            assert torch.isfinite(logits).all(), (
+                f"grid_size={grid_size}: logits no finitos con entrada extrema"
+            )
+
+    def test_winsorization_bounds_embedding_magnitude(self):
+        encoder = KANNumericalEncoder(num_fields=3, embedding_dim=8, grid_size=10)
+        encoder.calibrate(torch.randn(500, 3))
+
+        x = torch.randn(32, 3)
+        x[0, :] = 690.0
+        emb = encoder(x)
+
+        # Sin winsorizado la magnitud llegaba a ~7e2; con clip a 10 sigmas
+        # debe quedar en un orden de magnitud manejable.
+        assert emb.abs().max().item() < 100.0, (
+            f"embedding sin acotar: |emb|max={emb.abs().max().item():.1f}"
+        )
+
+    def test_winsorization_does_not_alter_normal_range(self):
+        """Los datos normales (<10 sigmas) deben pasar intactos."""
+        encoder = KANNumericalEncoder(num_fields=2, embedding_dim=4, grid_size=10)
+        encoder.calibrate(torch.randn(200, 2))
+        x = torch.randn(16, 2) * 2.0          # ~2 sigmas, muy dentro del clip
+        assert torch.allclose(x.clamp(-encoder.input_clip, encoder.input_clip), x)

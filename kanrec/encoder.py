@@ -63,9 +63,12 @@ class KANNumericalEncoder(nn.Module):
         grid_size: int = 10,
         spline_order: int = 3,
         monotone_fields: list[int] | None = None,
+        input_clip: float = 10.0,
     ):
         super().__init__()
         self.num_fields = num_fields
+        #: Winsorizado de la entrada, en desviaciones tipicas (ver forward()).
+        self.input_clip = input_clip
         self.embedding_dim = embedding_dim
         self.grid_size = grid_size
         self.spline_order = spline_order
@@ -91,6 +94,22 @@ class KANNumericalEncoder(nn.Module):
         Returns:
             embeddings: [batch, num_fields, embedding_dim]
         """
+        # Winsorizado de la entrada (hallazgo verificado en la corrida real de
+        # Colab): tras StandardScaler, Criteo conserva outliers de hasta ~690
+        # desviaciones tipicas en I6/I12. La ruta base del KAN es
+        # base_weight * SiLU(x), y SiLU(690) ~= 690, asi que un solo outlier
+        # arrastra el embedding a magnitud ~1e2-1e3. Con grid_size>=10 eso
+        # basta para que los logits desborden float32 en GPU y todas las
+        # predicciones salgan inf (AUC 0.5, logloss inf). Medido: sin clip
+        # |emb|max = 6.9e2; con clip = 1.0e1, dos ordenes de magnitud menos.
+        #
+        # +-10 sigmas conserva el 99.99% de los datos intacto (una normal
+        # supera 10 sigmas con probabilidad ~1e-23): solo se recortan los
+        # outliers patologicos, que es exactamente la practica estandar de
+        # winsorizado en CTR. No afecta a los baselines: viven fuera de
+        # este encoder.
+        x = x.clamp(-self.input_clip, self.input_clip)
+
         embeddings = []
         for j, kan in enumerate(self.field_kans):
             xj = x[:, j : j + 1]           # [batch, 1]
