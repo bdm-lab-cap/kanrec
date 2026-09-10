@@ -106,8 +106,18 @@ if _bad:
 print("Tabla 'train' verificada: I6..I13 normalizadas.")
 
 train_full = spark.read.table("train")
-cat_max_row = train_full.agg(*[F.max(c).alias(c) for c in idx_cols]).collect()[0]
-cat_cardinalities = [int(cat_max_row[c]) + 1 for c in idx_cols]
+# Cardinalidad = max indice sobre las TRES tablas + 1, no solo train.
+# StringIndexer(handleInvalid="keep") mete las categorias no vistas en un
+# indice extra; si ese indice solo aparece en val/test (no en train),
+# calcular la cardinalidad con el max de train la deja una unidad corta y
+# nn.Embedding aborta en GPU con "device-side assert" al procesar val/test.
+_max_per_split = []
+for _tbl in ("train", "val", "test"):
+    _row = spark.read.table(_tbl).agg(*[F.max(c).alias(c) for c in idx_cols]).collect()[0]
+    _max_per_split.append({c: (_row[c] if _row[c] is not None else 0) for c in idx_cols})
+cat_cardinalities = [
+    int(max(_m[c] for _m in _max_per_split)) + 1 for c in idx_cols
+]
 print(f"Cardinalidades categoricas (sobre TRAIN completo): {cat_cardinalities}")
 
 
