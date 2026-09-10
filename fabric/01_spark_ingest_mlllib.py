@@ -94,9 +94,18 @@ os.makedirs("/lakehouse/default/Files/config", exist_ok=True)
 with open("/lakehouse/default/Files/config/feature_selection.json", "w") as f:
     json.dump(selection, f, indent=2)
 
-train_t.write.format("delta").mode("overwrite").save("Tables/train")
-val_t.write.format("delta").mode("overwrite").save("Tables/val")
-test_t.write.format("delta").mode("overwrite").save("Tables/test")
+# Escritura como TABLA GESTIONADA del catalogo (saveAsTable), NO por ruta
+# (.save("Tables/train")). En Fabric, .save() a una ruta escribe los ficheros
+# Delta pero NO siempre actualiza la entrada del catalogo que consulta
+# spark.read.table("train"): el resultado era que 01 escribia los datos
+# normalizados en disco mientras la TABLA 'train' del catalogo seguia
+# apuntando a una version anterior con datos crudos (verificado: el historial
+# Delta mostraba escrituras de dias atras pese a reejecutar 01). saveAsTable
+# con overwrite reemplaza la tabla del catalogo, asi que 04/05/diagnostico,
+# que leen por nombre, ven de verdad la version nueva.
+train_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("train")
+val_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("val")
+test_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("test")
 print(f"TRAIN: {train_t.count():,} | VAL: {val_t.count():,} | TEST: {test_t.count():,}")
 
 # ── Verificacion (guardar esta salida para el Anexo D) ─────────────────────
@@ -105,6 +114,9 @@ print(f"TRAIN: {train_t.count():,} | VAL: {val_t.count():,} | TEST: {test_t.coun
 # escritura Delta iba a otro sitio o fallaba en silencio, la verificacion
 # no lo detectaba -- y el modelo acababa entrenando sobre una tabla vieja
 # sin normalizar (rango I6 hasta ~230000 en vez de ~[-3,3]).
+# Refrescar la cache del catalogo antes de releer, para que la verificacion
+# lea la version que ACABAMOS de escribir y no una cacheada de esta sesion.
+spark.catalog.refreshTable("train")
 written = spark.read.table("train")
 
 print("\nVerificacion — I1..I5 (log1p), leido de la tabla escrita:")
