@@ -570,3 +570,69 @@ class TestInputWinsorization:
         encoder.calibrate(torch.randn(200, 2))
         x = torch.randn(16, 2) * 2.0          # ~2 sigmas, muy dentro del clip
         assert torch.allclose(x.clamp(-encoder.input_clip, encoder.input_clip), x)
+
+
+# ── lstsq rank-deficient: NaN en GPU pero no en CPU ─────────────────────────
+
+class TestCalibrationRankDeficiency:
+    """
+    KAN-REC daba inf en TODAS las predicciones en Colab (GPU) mientras el
+    mismo codigo funcionaba en Fabric (CPU), y grid_size=5 sobrevivia
+    mientras 10 y 20 fallaban.
+
+    Causa raiz: update_grid -> curve2coeff -> torch.linalg.lstsq(A, B), con
+    A = bases B-spline. En Criteo muchos campos concentran sus valores en
+    pocos nudos, asi que A es rank-deficient. En CPU lstsq usa 'gelsd'
+    (SVD), que lo maneja; en CUDA solo existe 'gels', que exige rango
+    completo y devuelve NaN. Mas columnas en A (grid_size mayor) => mas
+    probabilidad de deficiencia, de ahi el patron 5-OK / 10-20-KO.
+
+    Arreglo: KANNumericalEncoder.calibrate() ejecuta siempre en CPU.
+    """
+
+    def test_gels_driver_fails_on_rank_deficient_matrix(self):
+        """Documenta el mecanismo: 'gels' (el de CUDA) no admite rango deficiente."""
+        torch.manual_seed(0)
+        A = torch.zeros(1, 5000, 13)
+        A[0, :, 4:7] = torch.rand(5000, 3)      # rango 3 de 13
+        B = torch.randn(1, 5000, 16)
+
+        assert torch.linalg.matrix_rank(A[0]).item() < 13
+
+        # El driver por defecto en CPU (gelsd, SVD) si lo resuelve
+        assert torch.isfinite(torch.linalg.lstsq(A, B).solution).all()
+
+        # 'gels' falla: o lanza, o devuelve no finito
+        try:
+            sol = torch.linalg.lstsq(A, B, driver="gels").solution
+            assert not torch.isfinite(sol).all(), "gels deberia fallar aqui"
+        except RuntimeError:
+            pass   # lanzar tambien es un fallo valido para este caso
+
+    def test_calibrate_produces_finite_weights_on_concentrated_data(self):
+        """
+        Datos con la concentracion real de Criteo (95% el mismo valor):
+        la calibracion debe dar pesos finitos en todos los grid_size.
+        """
+        torch.manual_seed(0)
+        n = 20000
+        x = torch.full((n, 4), -0.2702)
+        for j in range(4):
+            n_nz = int(n * 0.05)
+            x[:n_nz, j] = torch.rand(n_nz) * 30
+
+        for grid_size in [5, 10, 20]:
+            enc = KANNumericalEncoder(num_fields=4, embedding_dim=8, grid_size=grid_size)
+            enc.calibrate(x)
+            for j, kan in enumerate(enc.field_kans):
+                assert torch.isfinite(kan.layers[0].spline_weight).all(), (
+                    f"grid_size={grid_size}, campo {j}: spline_weight no finito"
+                )
+            assert torch.isfinite(enc(x[:100])).all()
+
+    def test_calibrate_restores_original_device(self):
+        """calibrate() baja a CPU internamente; debe devolver el modelo a su device."""
+        enc = KANNumericalEncoder(num_fields=2, embedding_dim=4)
+        device_before = next(enc.parameters()).device
+        enc.calibrate(torch.randn(200, 2))
+        assert next(enc.parameters()).device == device_before

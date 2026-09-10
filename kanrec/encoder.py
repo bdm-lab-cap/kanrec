@@ -129,6 +129,22 @@ class KANNumericalEncoder(nn.Module):
         is the officially supported KAN grid-refinement mechanism, not a
         heuristic on top of it.
 
+        La calibracion se ejecuta SIEMPRE EN CPU (causa raiz verificada):
+        `update_grid` llama a `curve2coeff`, que resuelve
+        `torch.linalg.lstsq(A, B)` donde A son las bases B-spline. En Criteo
+        muchos campos concentran sus valores en pocos nudos, asi que A es
+        rank-deficient (medido: rango 3 de 13 columnas). En CPU, lstsq usa
+        por defecto el driver `gelsd` (basado en SVD), que maneja rango
+        deficiente sin problema. En CUDA solo existe `gels`, que EXIGE rango
+        completo y devuelve NaN. Ese NaN contaminaba spline_weight y hacia
+        que todas las predicciones salieran inf (AUC 0.5, logloss inf) en
+        GPU, mientras el mismo codigo funcionaba en CPU. Explica tambien por
+        que grid_size=5 sobrevivia (8 columnas en A, menos deficiencia de
+        rango) y 10/20 no (13 y 23 columnas).
+
+        Calibrar en CPU es barato: es una sola pasada previa al
+        entrenamiento, no afecta al bucle de training, que sigue en GPU.
+
         Args:
             x_sample: [n_rows, num_fields] normalised numerical values.
         """
@@ -136,9 +152,27 @@ class KANNumericalEncoder(nn.Module):
             raise ValueError(
                 f"calibrate() expected {self.num_fields} columns, got {x_sample.size(1)}"
             )
-        for j, kan in enumerate(self.field_kans):
-            xj = x_sample[:, j : j + 1]
-            kan(xj, update_grid=True)
+
+        device = next(self.parameters()).device
+        self.to("cpu")
+        x_cpu = x_sample.detach().to("cpu")
+        try:
+            for j, kan in enumerate(self.field_kans):
+                xj = x_cpu[:, j : j + 1]
+                kan(xj, update_grid=True)
+                # Salvaguarda: si aun asi algun peso saliera no finito, se
+                # restaura una inicializacion valida en vez de propagar NaN.
+                layer = kan.layers[0]
+                if not torch.isfinite(layer.spline_weight).all():
+                    import warnings
+                    warnings.warn(
+                        f"calibrate(): spline_weight no finito en el campo {j} "
+                        f"tras update_grid; se reinicializa ese campo.",
+                        stacklevel=2,
+                    )
+                    layer.reset_parameters()
+        finally:
+            self.to(device)
         self._calibrated = True
 
     def field_range(self, field_idx: int) -> tuple[float, float]:
