@@ -192,7 +192,8 @@ def evaluate(model, loader) -> tuple[float, float]:
     preds, labels = [], []
     with torch.no_grad():
         for x_num, x_cat, y in loader:
-            p = model(x_num.to(device), x_cat.to(device)).squeeze().cpu().numpy()
+            logits = model(x_num.to(device), x_cat.to(device)).squeeze()
+            p = torch.sigmoid(logits).cpu().numpy()  # el modelo devuelve LOGITS
             preds.extend(np.atleast_1d(p))
             labels.extend(y.numpy())
     return roc_auc_score(labels, preds), log_loss(labels, preds)
@@ -241,7 +242,9 @@ def train_one_run(encoder_name: str, seed: int, max_epochs: int = 12,
     else:
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=1, factor=0.5)
-    criterion = torch.nn.BCELoss()
+    # BCEWithLogitsLoss (no BCELoss): estable numericamente; evita el
+    # device-side assert por log(0) cuando pred satura a 0/1 (C3).
+    criterion = torch.nn.BCEWithLogitsLoss()
 
     ckpt_path = f"{CKPT_PATH}/trial_{encoder_name}_gs{grid_size}_s{seed}.pt"
     best_val_auc, patience_ctr = 0.0, 0
@@ -258,8 +261,8 @@ def train_one_run(encoder_name: str, seed: int, max_epochs: int = 12,
             for x_num, x_cat, y in train_loader:
                 x_num, x_cat, y = x_num.to(device), x_cat.to(device), y.to(device)
                 optimizer.zero_grad()
-                y_pred = model(x_num, x_cat).squeeze()
-                loss = criterion(y_pred, y)
+                logits = model(x_num, x_cat).squeeze()  # logits, no proba
+                loss = criterion(logits, y)
                 if hasattr(model, "entropy_regularization_loss"):
                     loss = loss + model.entropy_regularization_loss()
                 loss.backward()

@@ -41,7 +41,9 @@ class FaithfulnessEvaluator:
 
         with torch.no_grad():
             for x_num, x_cat, _ in self.test_loader:
-                y_kan = self.model(x_num, x_cat).squeeze().numpy()
+                # forward() ahora devuelve LOGITS; sigmoid para comparar en
+                # el mismo espacio de probabilidad que _apply_symbolic.
+                y_kan = torch.sigmoid(self.model(x_num, x_cat).squeeze()).numpy()
                 y_sym = self._apply_symbolic(x_num.numpy())
                 kan_preds.extend(y_kan)
                 sym_preds.extend(y_sym)

@@ -116,7 +116,8 @@ def train(config: dict) -> float:
         else:
             optimizer = Adam(model.parameters(), lr=config["lr"], weight_decay=1e-5)
         scheduler = ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
-        criterion = torch.nn.BCELoss()
+        # BCEWithLogitsLoss: estable, evita device-side assert por log(0) (C3)
+        criterion = torch.nn.BCEWithLogitsLoss()
 
         best_val_auc, patience_ctr = 0.0, 0
         # grid_size va en el nombre: evita que un barrido local de
@@ -131,8 +132,8 @@ def train(config: dict) -> float:
             for x_num, x_cat, y in dm.train_dataloader():
                 x_num, x_cat, y = x_num.to(device), x_cat.to(device), y.to(device)
                 optimizer.zero_grad()
-                y_pred = model(x_num, x_cat).squeeze()
-                loss = criterion(y_pred, y)
+                logits = model(x_num, x_cat).squeeze()
+                loss = criterion(logits, y)
                 if hasattr(model, "entropy_regularization_loss"):
                     loss = loss + model.entropy_regularization_loss()
                 loss.backward()
@@ -144,7 +145,7 @@ def train(config: dict) -> float:
             val_preds, val_labels = [], []
             with torch.no_grad():
                 for x_num, x_cat, y in dm.val_dataloader():
-                    p = model(x_num.to(device), x_cat.to(device)).squeeze().cpu().numpy()
+                    p = torch.sigmoid(model(x_num.to(device), x_cat.to(device)).squeeze()).cpu().numpy()
                     val_preds.extend(p)
                     val_labels.extend(y.numpy())
 
@@ -171,7 +172,7 @@ def train(config: dict) -> float:
         test_preds, test_labels = [], []
         with torch.no_grad():
             for x_num, x_cat, y in dm.test_dataloader():
-                p = model(x_num.to(device), x_cat.to(device)).squeeze().cpu().numpy()
+                p = torch.sigmoid(model(x_num.to(device), x_cat.to(device)).squeeze()).cpu().numpy()
                 test_preds.extend(p)
                 test_labels.extend(y.numpy())
 

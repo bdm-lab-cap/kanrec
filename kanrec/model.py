@@ -95,24 +95,36 @@ class CTRModel(nn.Module):
             output_dim=64,
         )
 
-        self.head = nn.Sequential(
-            nn.Linear(self.interaction.output_dim, 1),
-            nn.Sigmoid(),
-        )
+        # La cabeza devuelve LOGITS, no probabilidades. La Sigmoid se quito
+        # de aqui (hallazgo C3, y causa raiz de un device-side assert en GPU):
+        # Sigmoid + BCELoss puede saturar a pred=0.0 o 1.0 exactos en float32,
+        # y entonces BCELoss calcula log(0)=-inf, que en CUDA es un assert
+        # fatal (en CPU solo daba inf y seguia, por eso no fallaba localmente).
+        # El entrenamiento usa BCEWithLogitsLoss (sigmoid + BCE fusionados de
+        # forma numericamente estable); para inferencia esta predict_proba.
+        self.head = nn.Linear(self.interaction.output_dim, 1)
 
     def forward(self, x_num: torch.Tensor, x_cat: torch.Tensor) -> torch.Tensor:
         """
+        Returns LOGITS (pre-sigmoid). Use with BCEWithLogitsLoss for training;
+        call predict_proba() for probabilities.
+
         Args:
             x_num: [batch, num_numerical]   — normalised numerical features
             x_cat: [batch, num_categorical] — integer categorical IDs
         Returns:
-            y_pred: [batch, 1]
+            logits: [batch, 1]
         """
         num_emb = self.numerical_encoder(x_num)                     # [B, N_num, D]
         cat_embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.cat_embeddings)]
         cat_emb = torch.stack(cat_embs, dim=1)                      # [B, N_cat, D]
         all_emb = torch.cat([num_emb, cat_emb], dim=1)              # [B, N_total, D]
         return self.head(self.interaction(all_emb))
+
+    @torch.no_grad()
+    def predict_proba(self, x_num: torch.Tensor, x_cat: torch.Tensor) -> torch.Tensor:
+        """Probabilities in [0, 1] (sigmoid of the logits), for evaluation."""
+        return torch.sigmoid(self.forward(x_num, x_cat))
 
 
 class KANRecModel(CTRModel):

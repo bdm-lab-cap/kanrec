@@ -413,7 +413,7 @@ class TestSplineIsShapeAdaptive:
                              embedding_dim=16, kan_grid_size=10)
         model.calibrate(x_num[:4000])
         optimizer = torch.optim.Adam(model.parameter_groups(base_lr=1e-3), weight_decay=1e-5)
-        criterion = torch.nn.BCELoss()
+        criterion = torch.nn.BCEWithLogitsLoss()  # el modelo devuelve logits
         for _ in range(epochs):
             optimizer.zero_grad()
             loss = criterion(model(x_num, x_cat).squeeze(), y)
@@ -467,3 +467,56 @@ class TestSplineIsShapeAdaptive:
             f"phi se curva (R2 lineal={r2_linear:.3f}) con una senal realmente "
             f"lineal: el encoder esta sobreajustando ruido"
         )
+
+
+# ── C3: el modelo devuelve logits, no probabilidades (evita device-side assert) ─
+
+class TestModelReturnsLogits:
+    """
+    Un device-side assert de CUDA tumbaba KAN-REC en Colab dentro de
+    binary_cross_entropy. Causa: la cabeza tenia Sigmoid y el entrenamiento
+    usaba BCELoss; cuando la Sigmoid saturaba a 0.0 o 1.0 exactos en float32,
+    BCELoss calculaba log(0)=-inf, que en GPU es un assert fatal (en CPU solo
+    daba inf y seguia, por eso no fallaba localmente). El modelo ahora
+    devuelve logits y el entrenamiento usa BCEWithLogitsLoss (estable).
+    """
+
+    def test_forward_returns_logits_not_probabilities(self):
+        from kanrec.baselines import build_model
+
+        for encoder in ["raw", "autodis", "kan-bspline"]:
+            model = build_model(encoder, num_numerical=3, cat_cardinalities=[5, 5])
+            if hasattr(model, "calibrate"):
+                model.calibrate(torch.randn(50, 3))
+            # Forzar valores grandes para empujar hacia la saturacion
+            x_num = torch.randn(64, 3) * 10
+            x_cat = torch.randint(0, 5, (64, 2))
+            logits = model(x_num, x_cat)
+            # Los logits pueden salir de [0,1]; es justo lo que queremos.
+            assert torch.isfinite(logits).all()
+
+    def test_predict_proba_is_in_unit_interval(self):
+        model = KANRecModel(num_numerical=3, cat_cardinalities=[5, 5], embedding_dim=8)
+        model.calibrate(torch.randn(50, 3))
+        x_num = torch.randn(64, 3) * 10
+        x_cat = torch.randint(0, 5, (64, 2))
+        proba = model.predict_proba(x_num, x_cat)
+        assert (proba >= 0).all() and (proba <= 1).all()
+
+    def test_bcewithlogits_is_finite_on_saturated_output(self):
+        """
+        BCEWithLogitsLoss debe ser finita y estable con logits extremos,
+        que es la razon por la que sustituye a Sigmoid+BCELoss. La cabeza
+        del modelo devuelve logits precisamente para poder usar esta perdida
+        fusionada, que nunca materializa una probabilidad saturada y por
+        tanto no puede disparar el kernel de BCE de CUDA sobre 0.0/1.0 exacto
+        (el device-side assert que tumbaba KAN-REC en Colab).
+        """
+        logits = torch.tensor([-100.0, 100.0, 0.0, -40.0, 40.0])
+        target = torch.tensor([1.0, 0.0, 1.0, 0.0, 1.0])
+        loss = torch.nn.BCEWithLogitsLoss()(logits, target)
+        assert torch.isfinite(loss), "BCEWithLogitsLoss no deberia dar inf/nan"
+        # Y su gradiente tambien debe ser finito (lo que se propaga al modelo).
+        logits.requires_grad_(True)
+        torch.nn.BCEWithLogitsLoss()(logits, target).backward()
+        assert torch.isfinite(logits.grad).all()
