@@ -73,19 +73,9 @@ FORMULA_TEMPLATES = {
 }
 
 
-def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) -> dict:
-    """
-    Ajusta la libreria de operadores sobre la dimension 0 del embedding del
-    campo, evaluada en el rango REAL calibrado del campo (no en [-3, 3]
-    fijo — ver KANNumericalEncoder.get_spline_curves).
-
-    NOTA (hallazgo A7, pendiente): esto describe una de las EMBEDDING_DIM
-    dimensiones de phi_j, no la funcion de scoring completa del modelo.
-    Ese alcance debe quedar explicito en la memoria, no solo aqui.
-    """
-    x_grid, y_curves = model.numerical_encoder.get_spline_curves(field_idx)
-    x_np, y_np = x_grid.numpy(), y_curves[:, 0].numpy()
-    best = {"operator": None, "r2": -1.0, "params": None, "formula": "?", "accepted": False}
+def _fit_one_curve(x_np, y_np, field_idx, dim):
+    """Ajusta la libreria de operadores a UNA curva y devuelve el mejor."""
+    best = {"operator": None, "r2": -1.0, "params": None, "formula": "?"}
     for name, fn in OPERATOR_LIBRARY.items():
         try:
             # np.errstate: curve_fit explora deliberadamente valores extremos
@@ -98,15 +88,81 @@ def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) ->
                 y_pred = fn(x_np, *params)
             if not np.all(np.isfinite(y_pred)) or not np.all(np.isfinite(params)):
                 continue
-            r2 = float(1 - np.sum((y_np - y_pred) ** 2) / (np.sum((y_np - y_np.mean()) ** 2) + 1e-10))
+            ss_tot = np.sum((y_np - y_np.mean()) ** 2)
+            if ss_tot < 1e-12:      # curva plana: el R2 no esta definido
+                continue
+            r2 = float(1 - np.sum((y_np - y_pred) ** 2) / (ss_tot + 1e-10))
             if r2 > best["r2"]:
                 a, b = round(float(params[0]), 4), round(float(params[1]), 4)
-                best = {"operator": name, "r2": r2, "params": [float(params[0]), float(params[1])],
-                        "formula": FORMULA_TEMPLATES[name].format(a=a, b=b), "accepted": r2 >= r2_threshold}
+                best = {"operator": name, "r2": r2,
+                        "params": [float(params[0]), float(params[1])],
+                        "formula": FORMULA_TEMPLATES[name].format(a=a, b=b)}
         except Exception as exc:
-            print(f"    (aviso: el operador '{name}' no ajusto para el campo {field_idx}: {exc})")
+            print(f"    (aviso: operador '{name}' no ajusto en campo {field_idx} dim {dim}: {exc})")
             continue
     return best
+
+
+def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) -> dict:
+    """
+    Ajusta la libreria de operadores a las EMBEDDING_DIM dimensiones de
+    phi_j, evaluadas en el rango REAL calibrado del campo.
+
+    Antes solo se ajustaba la dimension 0 y se reportaba como si describiera
+    el campo entero, asumiendo sin demostrarlo que esa dimension era
+    representativa. Ahora se ajustan todas y se reporta:
+      - el operador DOMINANTE (el que gana en mas dimensiones),
+      - r2_mean / r2_std / r2_min sobre las 16, para poder afirmar que la
+        forma detectada es una propiedad del campo y no de una proyeccion,
+      - operator_agreement: en que fraccion de las dimensiones gana el
+        operador dominante.
+    Se conserva `dim0_*` para poder comparar con los resultados anteriores.
+
+    NOTA (hallazgo A7): esto describe phi_j, la funcion de CODIFICACION del
+    campo, no la funcion de scoring completa (que ademas pasa por las 26
+    categoricas, la interaccion y la cabeza). Ese alcance debe quedar
+    explicito en la memoria.
+    """
+    x_grid, y_curves = model.numerical_encoder.get_spline_curves(field_idx)
+    x_np = x_grid.numpy()
+    n_dims = y_curves.shape[1]
+
+    per_dim = []
+    for d in range(n_dims):
+        fit = _fit_one_curve(x_np, y_curves[:, d].numpy(), field_idx, d)
+        if fit["operator"] is not None:
+            per_dim.append(fit)
+
+    if not per_dim:
+        return {"operator": None, "r2": -1.0, "params": None, "formula": "?",
+                "accepted": False, "n_dims_fitted": 0}
+
+    ops = [f["operator"] for f in per_dim]
+    dominant, n_dom = Counter(ops).most_common(1)[0]
+    r2s = np.array([f["r2"] for f in per_dim], dtype=float)
+
+    # La formula representativa: la del ajuste con mejor R2 ENTRE las
+    # dimensiones que eligieron el operador dominante.
+    dom_fits = [f for f in per_dim if f["operator"] == dominant]
+    representative = max(dom_fits, key=lambda f: f["r2"])
+
+    return {
+        "operator": dominant,
+        "r2": float(r2s.mean()),
+        "params": representative["params"],
+        "formula": representative["formula"],
+        "accepted": bool(r2s.mean() >= r2_threshold),
+        # Evidencia de que la forma es del campo, no de una proyeccion
+        "n_dims_fitted": len(per_dim),
+        "operator_agreement": n_dom / len(per_dim),
+        "r2_mean": float(r2s.mean()),
+        "r2_std": float(r2s.std()),
+        "r2_min": float(r2s.min()),
+        "r2_max": float(r2s.max()),
+        # Comparabilidad con la version anterior (solo dim 0)
+        "dim0_operator": per_dim[0]["operator"],
+        "dim0_r2": per_dim[0]["r2"],
+    }
 
 
 def load_model_from_checkpoint(ckpt_path: str) -> KANRecModel:
@@ -185,12 +241,17 @@ for seed, ckpt in checkpoints:
 
     norms = model.numerical_encoder.get_edge_norms()
     surviving = [j for j, n in enumerate(norms) if n >= np.percentile(norms, 20)]
-    print(f"L1 pruning (norma del spline, no de todos los parametros): "
-          f"{len(surviving)}/{len(norms)} campos sobreviven")
-    # NOTA (hallazgo B2, pendiente): el umbral del percentil 20 elimina,
-    # por construccion, ~20% de los campos tengan o no importancia real
-    # para la prediccion. Un criterio basado en la caida de AUC al anular
-    # cada campo es mas defendible y es tarea del paso de interpretabilidad.
+    # ATENCION al interpretar esto (hallazgo B2): el percentil 20 descarta
+    # ~20% de los campos POR CONSTRUCCION, tengan o no importancia real.
+    # No es una medida de importancia: es un criterio de conveniencia para
+    # acotar cuantas formulas hay que inspeccionar. En la memoria debe
+    # presentarse asi, no como si "10 de 13 campos resultaran relevantes".
+    # Una poda por caida de AUC al anular cada campo seria mas rigurosa y
+    # queda como linea de trabajo futura.
+    print(f"Poda por norma L1 del spline (percentil {20}): se retienen "
+          f"{len(surviving)}/{len(norms)} campos para inspeccion")
+    print("  (criterio de conveniencia, NO una medida de importancia: el "
+          "percentil descarta ~20% por construccion)")
 
     seed_results = {}
     for j in surviving:
@@ -198,7 +259,13 @@ for seed, ckpt in checkpoints:
         field = NUMERICAL_COLS[j]
         seed_results[field] = r
         mark = "✓" if r["accepted"] else "✗"
-        print(f"  {mark} {field}: {r['operator']:8s} R²={r['r2']:.4f}  {r['formula']}")
+        # R2 medio sobre las 16 dimensiones +- desviacion, y en que fraccion
+        # de ellas gana el operador dominante: es la evidencia de que la
+        # forma detectada es del campo y no de una proyeccion concreta.
+        print(f"  {mark} {field}: {r['operator']:8s} "
+              f"R²={r['r2_mean']:.4f}±{r['r2_std']:.4f} (min {r['r2_min']:.4f}) "
+              f"acuerdo={r['operator_agreement']:.0%} de {r['n_dims_fitted']} dims  "
+              f"{r['formula']}")
     results_all_seeds[seed] = seed_results
 
 # ── Informe de estabilidad ──────────────────────────────────────────────────
