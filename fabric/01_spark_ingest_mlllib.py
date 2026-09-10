@@ -47,9 +47,26 @@ LOG_COLS = [f"I{i}" for i in range(1, 6)]   # log1p (recuento/frecuencia)
 STD_COLS = [f"I{i}" for i in range(6, 14)]  # StandardScaler (magnitud libre)
 
 print("Loading Criteo...")
-raw = (spark.read.option("sep", "\t").option("inferSchema", "true")
-       .csv("Files/raw/criteo_10m.tsv")
-       .toDF("label", *NUMERICAL_COLS, *CATEGORICAL_COLS))
+# Esquema explicito en vez de inferSchema=true. Motivos:
+#   - inferSchema fuerza una pasada completa extra sobre los 2.26 GB solo
+#     para deducir tipos (mas lento; mala practica en Spark a esta escala).
+#   - inferSchema + modo FAILFAST (el default) aborta el job entero con
+#     "MALFORMED_RECORD_IN_PARSING" en cuanto una fila no encaja con el tipo
+#     deducido, y Criteo (10M filas) tiene filas irregulares. Con el esquema
+#     declarado y mode=PERMISSIVE, esas celdas se leen como null (que el
+#     bloque de imputacion de abajo ya convierte a 0.0) en vez de reventar.
+from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType, StringType
+
+schema = StructType(
+    [StructField("label", IntegerType(), True)]
+    + [StructField(c, DoubleType(), True) for c in NUMERICAL_COLS]
+    + [StructField(c, StringType(), True) for c in CATEGORICAL_COLS]
+)
+raw = (spark.read
+       .option("sep", "\t")
+       .option("mode", "PERMISSIVE")
+       .schema(schema)
+       .csv("Files/raw/criteo_10m.tsv"))
 
 # NOTA (deferred, hallazgo B9): los nulos se imputan a 0.0 sin una mascara
 # de "is_null" separada, así que "ausente" y "vale cero" quedan fusionados.
@@ -57,8 +74,11 @@ raw = (spark.read.option("sep", "\t").option("inferSchema", "true")
 # columnas binarias I{j}_is_null es la mejora natural del siguiente pase,
 # no de este (que se centra en que la normalizacion llegue al modelo).
 for c in NUMERICAL_COLS:
+    # Ya son DoubleType por el esquema declarado; no se hace cast a float32
+    # (float32 perdia precision en el StandardScaler con outliers a ~690
+    # desviaciones tipicas, ver verificacion mas abajo).
     raw = raw.withColumn(c, F.when(F.col(c).isNull(), 0.0)
-                           .otherwise(F.abs(F.col(c).cast("float"))))
+                           .otherwise(F.abs(F.col(c))))
 
 total = raw.count()
 print(f"Total rows: {total:,}")
