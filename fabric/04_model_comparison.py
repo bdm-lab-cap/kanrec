@@ -84,9 +84,28 @@ print(f"Numerical fields ({len(NUMERICAL_COLS)}): {NUMERICAL_COLS}")
 # tamano de vocabulario), y se reutiliza para los tres encoders.
 
 idx_cols = [f"{c}_idx" for c in CATEGORICAL_COLS]
-train_full = spark.read.table("train")
 
 from pyspark.sql import functions as F
+
+# Refrescar cache de metadatos antes de leer: si 01 reescribio las tablas en
+# la misma capacidad, esta sesion podia seguir viendo la version anterior sin
+# normalizar y entrenar sobre datos crudos (ver 04_model_comparison_trial.py
+# para el detalle del fallo). Guardia dura si I6..I13 no estan normalizadas.
+for _t in ("train", "val", "test"):
+    spark.catalog.refreshTable(_t)
+STD_CHECK = [f"I{i}" for i in range(6, 14)]
+_std_row = spark.read.table("train").select(
+    *[F.stddev(c).alias(c) for c in STD_CHECK]
+).collect()[0]
+_bad = [c for c in STD_CHECK if _std_row[c] is not None and _std_row[c] > 5.0]
+if _bad:
+    raise RuntimeError(
+        f"La tabla 'train' NO esta normalizada: {_bad} con stddev>5. Reejecuta "
+        f"01_spark_ingest_mlllib con el kernel de ESTA sesion antes de entrenar."
+    )
+print("Tabla 'train' verificada: I6..I13 normalizadas.")
+
+train_full = spark.read.table("train")
 cat_max_row = train_full.agg(*[F.max(c).alias(c) for c in idx_cols]).collect()[0]
 cat_cardinalities = [int(cat_max_row[c]) + 1 for c in idx_cols]
 print(f"Cardinalidades categoricas (sobre TRAIN completo): {cat_cardinalities}")

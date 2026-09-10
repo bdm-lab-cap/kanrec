@@ -93,10 +93,35 @@ os.makedirs(CKPT_PATH, exist_ok=True)
 # ============================================================================
 # CELDA 2 — Cardinalidades categoricas (igual que en la version completa)
 # ============================================================================
+from pyspark.sql import functions as F
+
+# Refrescar la cache de metadatos de Spark ANTES de leer nada. Sin esto, si
+# 01 reescribio las tablas ('overwrite') en la misma capacidad de Fabric,
+# esta sesion podia seguir viendo el esquema/datos anteriores en cache y
+# entrenar sobre la tabla vieja SIN normalizar (rango I6 hasta ~12000 en vez
+# de ~[-3,3]), produciendo curvas espuriamente lineales. Verificado: era la
+# causa de que 04_trial diera el mismo AUC pese a haber reejecutado 01.
+for _t in ("train", "val", "test"):
+    spark.catalog.refreshTable(_t)
+
+# Guardia: si I6..I13 no estan normalizadas en la tabla que vamos a leer,
+# parar aqui en vez de entrenar sobre datos crudos. Reejecuta 01 primero.
+STD_CHECK = [f"I{i}" for i in range(6, 14)]
+_std_row = spark.read.table("train").select(
+    *[F.stddev(c).alias(c) for c in STD_CHECK]
+).collect()[0]
+_bad = [c for c in STD_CHECK if _std_row[c] is not None and _std_row[c] > 5.0]
+if _bad:
+    raise RuntimeError(
+        f"La tabla 'train' NO esta normalizada: {_bad} con stddev>5 (deberia "
+        f"ser ~1.0). Reejecuta 01_spark_ingest_mlllib (con el kernel de ESTA "
+        f"sesion, para que el refresh de cache tenga efecto) antes de entrenar."
+    )
+print("Tabla 'train' verificada: I6..I13 normalizadas.")
+
 idx_cols = [f"{c}_idx" for c in CATEGORICAL_COLS]
 train_full = spark.read.table("train")
 
-from pyspark.sql import functions as F
 cat_max_row = train_full.agg(*[F.max(c).alias(c) for c in idx_cols]).collect()[0]
 cat_cardinalities = [int(cat_max_row[c]) + 1 for c in idx_cols]
 print(f"Cardinalidades categoricas: {cat_cardinalities}")
