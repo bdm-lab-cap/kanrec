@@ -314,9 +314,12 @@ with open("/lakehouse/default/Files/results/symbolic_results.json", "w") as f:
     }, f, indent=2)
 print("\nsymbolic_results.json saved to Files/results/")
 print(
-    "\nRECORDATORIO para la memoria (hallazgo A7): esta formula describe la "
-    "dimension 0 del embedding de cada campo, no la funcion de scoring "
-    "completa (que tambien pasa por las 26 categoricas, la interaccion y "
-    "la cabeza). La metrica de fidelidad que cuantifica esa brecha es "
-    "tarea del siguiente paso."
+    "\nRECORDATORIO para la memoria (hallazgo A7): la formula describe phi_j, "
+    "la funcion de CODIFICACION del campo (ajustada sobre las 16 dimensiones "
+    "de su embedding), NO la funcion de scoring completa: el scoring pasa "
+    "ademas por las 26 categoricas, la capa de interaccion y la cabeza. "
+    "Presentalo como 'que hace el modelo con esta variable', no como 'la "
+    "formula del scoring'. Cuantificar la brecha entre phi_j y la prediccion "
+    "final requiere la ablacion por sustitucion (reemplazar phi_j por su "
+    "formula dentro del modelo y medir la caida de AUC), que es el siguiente paso."
 )
