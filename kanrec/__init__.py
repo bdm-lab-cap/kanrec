@@ -20,6 +20,7 @@ _LAZY: dict[str, str] = {
     "build_model": ".baselines",
     "SymbolicExtractor": ".symbolic",
     "FaithfulnessEvaluator": ".faithfulness",
+    "substitution_ablation": ".ablation",
     "MongoSymbolicStore": ".mongo_store",
     "get_secret": ".config",
     "atlas_uri": ".config",
@@ -35,6 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover - static analysers only
     from .config import atlas_uri, confluent_config, get_secret
     from .spark_utils import apply_pipeline_and_unpack, random_sample
     from .encoder import KANNumericalEncoder
+    from .ablation import substitution_ablation
     from .faithfulness import FaithfulnessEvaluator
     from .model import CTRModel, InteractionMLP, KANRecModel
     from .mongo_store import MongoSymbolicStore

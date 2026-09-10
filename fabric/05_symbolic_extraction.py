@@ -323,3 +323,47 @@ print(
     "final requiere la ablacion por sustitucion (reemplazar phi_j por su "
     "formula dentro del modelo y medir la caida de AUC), que es el siguiente paso."
 )
+
+# ============================================================================
+# ABLACION POR SUSTITUCION — la metrica de fidelidad
+# ============================================================================
+# Reemplaza phi_j por su formula simbolica DENTRO del modelo (dejando intactas
+# las 26 categoricas, la interaccion y la cabeza) y mide el efecto. Es la
+# unica forma de validar la afirmacion de interpretabilidad: si sustituir la
+# formula apenas cambia el modelo, la formula describe fielmente lo que el
+# encoder hacia.
+#
+# Se reportan dos metricas y la que manda es la SEGUNDA:
+#   - delta AUC: cuanto se degrada la prediccion. Poco sensible en CTR,
+#     donde el AUC lo dominan las categoricas.
+#   - error de curva (relativo): cuanto se desvia la curva sustituida de la
+#     real. Es la medida directa de fidelidad de la formula. Verificado que
+#     discrimina: sobre una senal sin(1.5x) el campo con esa senal sale con
+#     error 0.58 mientras los demas quedan por debajo de 0.19.
+from kanrec.ablation import substitution_ablation
+from torch.utils.data import DataLoader, TensorDataset
+
+# Reconstruir un loader de test desde la tabla (misma logica que 04)
+from kanrec.spark_utils import random_sample
+_test = random_sample(spark.read.table("test"), n_rows=20000, seed=42).toPandas()
+_x_num = torch.tensor(_test[NUMERICAL_COLS].fillna(0).values.astype("float32"))
+_idx_cols_present = [c for c in [f"C{i}_idx" for i in range(1, 27)] if c in _test.columns]
+_x_cat = torch.tensor(_test[_idx_cols_present].fillna(0).values.astype("int64"))
+_y = torch.tensor(_test["label"].values.astype("float32"))
+_loader = DataLoader(TensorDataset(_x_num, _x_cat, _y), batch_size=2048)
+
+# Usar los resultados de la ULTIMA semilla procesada
+_last_seed = max(results_all_seeds)
+_results = results_all_seeds[_last_seed]
+_model = load_model_from_checkpoint(dict(checkpoints)[_last_seed])
+
+print(f"\n{'='*70}")
+print(f"ABLACION POR SUSTITUCION (seed {_last_seed})")
+print(f"{'='*70}")
+_ablation = substitution_ablation(_model, _loader, _results,
+                                  numerical_cols=NUMERICAL_COLS)
+
+# Persistir junto al resto de resultados
+with open("/lakehouse/default/Files/results/ablation_report.json", "w") as f:
+    json.dump(_ablation, f, indent=2)
+print("\nablation_report.json guardado en Files/results/")
