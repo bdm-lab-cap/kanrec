@@ -46,6 +46,22 @@ CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
 LOG_COLS = [f"I{i}" for i in range(1, 6)]   # log1p (recuento/frecuencia)
 STD_COLS = [f"I{i}" for i in range(6, 14)]  # StandardScaler (magnitud libre)
 
+# Limpiar artefactos de ejecuciones anteriores antes de regenerar. Un
+# PipelineModel serializado o una tabla Delta de una corrida previa puede
+# quedar en un estado que aborta el saveAsTable con
+# "MALFORMED_RECORD_IN_PARSING [null,null,null]". Empezar en limpio elimina
+# esa clase de fallo. (En Fabric notebookutils.fs.rm siempre existe.)
+try:
+    import notebookutils
+    for _p in ["Files/models/mlllib_pipeline", "Tables/train", "Tables/val", "Tables/test"]:
+        try:
+            notebookutils.fs.rm(_p, recurse=True)
+            print(f"Limpiado artefacto previo: {_p}")
+        except Exception:
+            pass  # no existia, normal en la primera ejecucion
+except ImportError:
+    pass  # fuera de Fabric (tests locales)
+
 print("Loading Criteo...")
 # Esquema explicito en vez de inferSchema=true. Motivos:
 #   - inferSchema fuerza una pasada completa extra sobre los 2.26 GB solo
