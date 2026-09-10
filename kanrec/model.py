@@ -150,7 +150,60 @@ class KANRecModel(CTRModel):
         # faithful symbolic extraction). See encoder.entropy_regularization_loss
         # for the fix to the bug that made this always contribute zero
         # (hallazgo A6).
-        self.entropy_reg_weight = 1e-3
+        #
+        # 1e-5, not 1e-3 (verificado empiricamente): at 1e-3 the penalty
+        # crushes the spline path. Measured on a synthetic sin(2.5x) signal,
+        # |base_weight| / |spline_weight| after 40 epochs was 63x at 1e-3
+        # versus 16x at 1e-5 -- i.e. the regulariser was suppressing the
+        # very component this thesis is about. Ironically the A6 bug (which
+        # made the term always exactly 0.0) was hiding this.
+        self.entropy_reg_weight = 1e-5
+
+    def parameter_groups(self, base_lr: float = 1e-3, spline_lr_mult: float = 25.0) -> list[dict]:
+        """
+        Optimiser parameter groups giving the spline coefficients their own,
+        larger learning rate.
+
+        Why this exists (hallazgo detectado al ejecutar 05_symbolic_extraction
+        sobre datos reales): efficient-kan initialises `spline_weight` with
+        noise of amplitude `scale_noise / grid_size` (~0.01), while
+        `base_weight` gets full Kaiming init (~0.5). The spline therefore
+        starts ~50x smaller and, under a single shared learning rate, never
+        catches up: after 40 epochs it was still 13-63x smaller, and the
+        learned phi curves stayed essentially straight lines regardless of
+        the true shape of the data.
+
+        The symptom was unmistakable: symbolic extraction returned `linear`
+        for all 10 surviving fields with R2 ~= 0.998, eight of them sharing
+        the identical value 0.9981 -- the encoder was blind to the data.
+
+        With a 25x spline learning rate the encoder becomes shape-adaptive,
+        measured on synthetic signals over 3 seeds (R2 of a linear fit to
+        the learned curve -- low means "genuinely curved", high means
+        "straight"):
+
+            true signal   shared lr     spline lr x25
+            sin(2.5x)     0.734         0.094   <- correctly curves
+            x^2           0.732         0.028   <- correctly curves
+            2x (linear)   0.737         0.876   <- correctly stays straight
+
+        Note the control: under the shared lr the encoder produced R2~0.73
+        no matter what the underlying signal was. It is the *adaptivity*,
+        not merely a lower number, that shows the spline is now working.
+
+        Usage:
+            optimizer = torch.optim.Adam(model.parameter_groups(lr), weight_decay=1e-5)
+        """
+        spline_params, other_params = [], []
+        for name, param in self.named_parameters():
+            if "spline_weight" in name or "spline_scaler" in name:
+                spline_params.append(param)
+            else:
+                other_params.append(param)
+        return [
+            {"params": other_params, "lr": base_lr},
+            {"params": spline_params, "lr": base_lr * spline_lr_mult},
+        ]
 
     def calibrate(self, x_num_sample: torch.Tensor) -> None:
         """Adapts the numerical encoder's B-spline grids. See KANNumericalEncoder.calibrate."""

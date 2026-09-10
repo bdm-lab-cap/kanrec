@@ -30,7 +30,7 @@
 #   A6  — regularizacion de entropia > 0 de verdad (kanrec.encoder).
 #
 # Requiere el paquete kanrec instalado en esta sesion:
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@1724ed6023e056e7f6a4be8d95e65aa4aea984c8"
+#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
 #
 # IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
 # mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
@@ -44,7 +44,7 @@
 # ============================================================================
 # CELDA 1 — Instalacion e imports
 # ============================================================================
-# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@1724ed6023e056e7f6a4be8d95e65aa4aea984c8"
+# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
 # NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
 # los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
@@ -217,7 +217,15 @@ def train_one_run(
                 break
         model.calibrate(torch.cat(calib_batches, dim=0).to(device))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    # parameter_groups da al spline un lr 25x mayor: arranca ~50x mas pequeno
+    # que la ruta base por la inicializacion de efficient-kan y, con un lr
+    # compartido, nunca despega (las curvas phi salian rectas siempre, ver
+    # KANRecModel.parameter_groups). Los encoders raw/autodis no tienen
+    # splines, asi que para ellos el helper no existe y se usa el Adam normal.
+    if hasattr(model, "parameter_groups"):
+        optimizer = torch.optim.Adam(model.parameter_groups(base_lr=lr), weight_decay=1e-5)
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
     criterion = torch.nn.BCELoss()
 

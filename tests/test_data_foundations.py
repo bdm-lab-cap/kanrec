@@ -368,3 +368,102 @@ class TestOperatorLibraryRobustness:
                 f"el operador '{op}' difiere entre notebook y paquete:\n"
                 f"  notebook: {nb_line}\n  paquete : {pkg_line}"
             )
+
+
+# ── El spline debe ADAPTARSE a la forma de los datos, no salir siempre recto ─
+
+class TestSplineIsShapeAdaptive:
+    """
+    Detectado al ejecutar 05_symbolic_extraction sobre checkpoints reales:
+    la extraccion devolvia 'linear' para los 10 campos supervivientes con
+    R2 ~= 0.998, ocho de ellos con el valor identico 0.9981. No era que los
+    datos fueran lineales: el encoder era CIEGO a su forma.
+
+    Causa: efficient-kan inicializa spline_weight con ruido ~scale_noise/
+    grid_size (~0.01) mientras base_weight recibe Kaiming completo (~0.5).
+    Con un lr compartido el spline nunca alcanza a la ruta base, y phi sale
+    recta gobernada por el termino base SiLU. Ademas entropy_reg_weight=1e-3
+    agravaba el desequilibrio.
+
+    Arreglo: entropy_reg_weight=1e-5 y KANRecModel.parameter_groups(), que
+    da al spline un lr 25x mayor.
+    """
+
+    @staticmethod
+    def _train_and_measure_linearity(signal: str, seed: int, epochs: int = 40) -> float:
+        """Entrena sobre una senal conocida y devuelve el R2 de un ajuste lineal a phi_0."""
+        import numpy as np
+
+        # Configuracion REPRESENTATIVA (13 numericas + 26 categoricas, como
+        # Criteo), no una miniatura: con 4 campos y 2 categoricas el efecto
+        # se diluye y el test daba falsos negativos. Medido sobre 5 semillas
+        # en esta configuracion: R2_lin 0.76+-0.05 con lr compartido frente
+        # a 0.11+-0.07 con el lr del spline x25, sin solape entre grupos.
+        torch.manual_seed(seed)
+        n = 8000
+        x_num = torch.randn(n, 13)
+        x_cat = torch.randint(0, 10, (n, 26))
+        if signal == "curved":
+            logit = 3.0 * torch.sin(x_num[:, 0] * 2.5) - 1.0
+        else:
+            logit = 2.0 * x_num[:, 0] - 1.0
+        y = (torch.rand(n) < torch.sigmoid(logit)).float()
+
+        model = KANRecModel(num_numerical=13, cat_cardinalities=[10] * 26,
+                             embedding_dim=16, kan_grid_size=10)
+        model.calibrate(x_num[:4000])
+        optimizer = torch.optim.Adam(model.parameter_groups(base_lr=1e-3), weight_decay=1e-5)
+        criterion = torch.nn.BCELoss()
+        for _ in range(epochs):
+            optimizer.zero_grad()
+            loss = criterion(model(x_num, x_cat).squeeze(), y)
+            loss = loss + model.entropy_regularization_loss()
+            loss.backward()
+            optimizer.step()
+
+        x_grid, curves = model.numerical_encoder.get_spline_curves(0)
+        xs, ys = x_grid.numpy(), curves[:, 0].numpy()
+        coeffs = np.polyfit(xs, ys, 1)
+        residual = np.sum((ys - np.polyval(coeffs, xs)) ** 2)
+        total = np.sum((ys - ys.mean()) ** 2) + 1e-12
+        return float(1 - residual / total)
+
+    def test_parameter_groups_gives_spline_a_higher_lr(self):
+        model = KANRecModel(num_numerical=3, cat_cardinalities=[5, 5], embedding_dim=8)
+        groups = model.parameter_groups(base_lr=1e-3, spline_lr_mult=25.0)
+
+        assert len(groups) == 2
+        lrs = sorted(g["lr"] for g in groups)
+        assert lrs[0] == pytest.approx(1e-3)
+        assert lrs[1] == pytest.approx(2.5e-2)
+        # Todos los parametros deben estar en algun grupo, ninguno duplicado.
+        total = sum(len(g["params"]) for g in groups)
+        assert total == len(list(model.parameters()))
+
+    def test_entropy_weight_does_not_crush_the_spline(self):
+        """1e-3 aplastaba el spline (ratio 63x vs 16x). Debe quedarse bajo."""
+        model = KANRecModel(num_numerical=2, cat_cardinalities=[5], embedding_dim=8)
+        assert model.entropy_reg_weight <= 1e-4, (
+            "entropy_reg_weight demasiado alto: suprime la propia componente "
+            "spline que este TFM pretende estudiar"
+        )
+
+    @pytest.mark.slow
+    def test_spline_curves_when_data_is_curved(self):
+        r2_linear = self._train_and_measure_linearity("curved", seed=42)
+        assert r2_linear < 0.45, (
+            f"phi sigue siendo casi una recta (R2 lineal={r2_linear:.3f}) pese a "
+            f"que la senal real es sin(2.5x): el spline no esta contribuyendo"
+        )
+
+    @pytest.mark.slow
+    def test_spline_stays_straight_when_data_is_linear(self):
+        """
+        El control que demuestra que el arreglo no consiste simplemente en
+        'romper' las curvas: con datos lineales, phi DEBE seguir siendo recta.
+        """
+        r2_linear = self._train_and_measure_linearity("linear", seed=42)
+        assert r2_linear > 0.6, (
+            f"phi se curva (R2 lineal={r2_linear:.3f}) con una senal realmente "
+            f"lineal: el encoder esta sobreajustando ruido"
+        )

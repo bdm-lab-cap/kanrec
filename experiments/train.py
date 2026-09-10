@@ -106,7 +106,15 @@ def train(config: dict) -> float:
             model.calibrate(calib_sample)
             print(f"Grid calibrated on {calib_sample.size(0)} rows.")
 
-        optimizer = Adam(model.parameters(), lr=config["lr"], weight_decay=1e-5)
+        # parameter_groups da al spline un lr 25x mayor: arranca ~50x mas pequeno
+        # que la ruta base por la inicializacion de efficient-kan y, con un lr
+        # compartido, nunca despega (las curvas phi salian rectas siempre, ver
+        # KANRecModel.parameter_groups). Los encoders raw/autodis no tienen
+        # splines, asi que para ellos el helper no existe y se usa el Adam normal.
+        if hasattr(model, "parameter_groups"):
+            optimizer = Adam(model.parameter_groups(base_lr=config["lr"]), weight_decay=1e-5)
+        else:
+            optimizer = Adam(model.parameters(), lr=config["lr"], weight_decay=1e-5)
         scheduler = ReduceLROnPlateau(optimizer, patience=2, factor=0.5)
         criterion = torch.nn.BCELoss()
 
