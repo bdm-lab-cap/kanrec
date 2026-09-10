@@ -100,15 +100,34 @@ test_t.write.format("delta").mode("overwrite").save("Tables/test")
 print(f"TRAIN: {train_t.count():,} | VAL: {val_t.count():,} | TEST: {test_t.count():,}")
 
 # ── Verificacion (guardar esta salida para el Anexo D) ─────────────────────
-# I1..I5 deben mostrar un rango tipico de log1p (valores pequenos, no negativos).
-# I6..I13 deben mostrar media ~0.0 y stddev ~1.0: es la prueba de que el
-# StandardScaler llega de verdad a las columnas que el modelo lee, y no a
-# una columna vectorial que nadie consume.
-print("\nVerificacion — I1..I5 (log1p):")
-train_t.select(LOG_COLS).describe().show()
-print("Verificacion — I6..I13 (StandardScaler, esperado: mean~0, stddev~1):")
-train_t.select(STD_COLS).describe().show()
+# CLAVE: se lee de vuelta la TABLA ESCRITA EN DISCO, no train_t en memoria.
+# Antes se verificaba train_t (el DataFrame en memoria), asi que si la
+# escritura Delta iba a otro sitio o fallaba en silencio, la verificacion
+# no lo detectaba -- y el modelo acababa entrenando sobre una tabla vieja
+# sin normalizar (rango I6 hasta ~230000 en vez de ~[-3,3]).
+written = spark.read.table("train")
 
+print("\nVerificacion — I1..I5 (log1p), leido de la tabla escrita:")
+written.select(LOG_COLS).describe().show()
+print("Verificacion — I6..I13 (StandardScaler, esperado: mean~0, stddev~1):")
+written.select(STD_COLS).describe().show()
+
+# Asercion dura: si I6..I13 NO estan normalizadas en la tabla escrita, parar
+# aqui con un error claro en vez de dejar que 04/05 entrenen sobre datos
+# crudos y produzcan curvas espuriamente lineales (hallazgo A2).
+from pyspark.sql import functions as F
+stats = written.select(
+    *[F.stddev(c).alias(f"std_{c}") for c in STD_COLS]
+).collect()[0]
+bad = [c for c in STD_COLS if stats[f"std_{c}"] is not None and stats[f"std_{c}"] > 5.0]
+if bad:
+    raise RuntimeError(
+        f"La tabla 'train' escrita NO esta normalizada: {bad} tienen stddev>5 "
+        f"(deberia ser ~1.0). El StandardScaler no llego a estas columnas. "
+        f"Revisa que apply_pipeline_and_unpack se aplico y que la escritura "
+        f"Delta apunta a la tabla correcta. NO ejecutes 04/05 hasta arreglar esto."
+    )
+print("\n✓ Verificacion OK: la tabla 'train' escrita esta normalizada (I6..I13 stddev~1).")
 print("Done.")
 
 
