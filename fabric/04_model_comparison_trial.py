@@ -265,7 +265,11 @@ def train_one_run(encoder_name: str, seed: int, max_epochs: int = 12,
                 loss = criterion(logits, y)
                 if hasattr(model, "entropy_regularization_loss"):
                     loss = loss + model.entropy_regularization_loss()
+                if not torch.isfinite(loss):
+                    optimizer.zero_grad()
+                    continue  # salta el batch corrupto sin propagar NaN a los pesos
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 train_loss += loss.item()
 
