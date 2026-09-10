@@ -234,10 +234,19 @@ class KANNumericalEncoder(nn.Module):
             )
         low, high = self.field_range(field_idx)
         span = high - low
-        x_grid = torch.linspace(low - margin * span, high + margin * span, n_points)
+        # El grid debe crearse en el MISMO device que el modelo: torch.linspace
+        # devuelve CPU por defecto, y eso rompia con el modelo en GPU
+        # ("Expected all tensors to be on the same device"). Se detecta en
+        # tiempo de ejecucion en vez de asumir CPU.
+        device = self.field_kans[field_idx].layers[0].base_weight.device
+        x_grid = torch.linspace(low - margin * span, high + margin * span,
+                                n_points, device=device)
         with torch.no_grad():
             y_curves = self.field_kans[field_idx](x_grid.unsqueeze(1))
-        return x_grid, y_curves
+        # Se devuelven en CPU: todo lo que consume estas curvas (ajuste
+        # simbolico con scipy, graficas con matplotlib, metricas con numpy)
+        # trabaja en CPU, y asi el llamante no tiene que acordarse de mover.
+        return x_grid.cpu(), y_curves.cpu()
 
     def get_edge_norms(self) -> list[float]:
         """

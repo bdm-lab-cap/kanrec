@@ -636,3 +636,41 @@ class TestCalibrationRankDeficiency:
         device_before = next(enc.parameters()).device
         enc.calibrate(torch.randn(200, 2))
         assert next(enc.parameters()).device == device_before
+
+
+# ── Consistencia de device en get_spline_curves ────────────────────────────
+
+class TestSplineCurvesDevice:
+    """
+    get_spline_curves creaba el grid con torch.linspace SIN device, es decir
+    siempre en CPU. Con el modelo en GPU eso rompia con "Expected all tensors
+    to be on the same device" en cuanto algo consumia las curvas (la ablacion
+    por sustitucion, en Colab). No se detecto antes porque 05 corre en CPU.
+    """
+
+    def test_grid_is_created_on_the_model_device(self):
+        model = KANRecModel(num_numerical=3, cat_cardinalities=[5, 5], embedding_dim=8)
+        model.calibrate(torch.randn(200, 3))
+        expected = model.numerical_encoder.field_kans[0].layers[0].base_weight.device
+
+        # El forward interno debe poder ejecutarse sin error de device: si el
+        # grid se creara en otro device, esta llamada lanzaria RuntimeError.
+        x_grid, curves = model.numerical_encoder.get_spline_curves(0, n_points=32)
+        assert torch.isfinite(curves).all()
+        assert expected.type == next(model.parameters()).device.type
+
+    def test_curves_are_returned_on_cpu_for_numpy_consumers(self):
+        """
+        Todo lo que consume estas curvas (scipy, matplotlib, numpy) trabaja en
+        CPU, asi que se devuelven ya en CPU y el llamante no tiene que moverlas.
+        """
+        import numpy as np
+
+        model = KANRecModel(num_numerical=2, cat_cardinalities=[5], embedding_dim=4)
+        model.calibrate(torch.randn(200, 2))
+        x_grid, curves = model.numerical_encoder.get_spline_curves(0, n_points=32)
+
+        assert x_grid.device.type == "cpu"
+        assert curves.device.type == "cpu"
+        # .numpy() directo, sin .cpu() adicional
+        np.polyfit(x_grid.numpy(), curves[:, 0].numpy(), 1)
