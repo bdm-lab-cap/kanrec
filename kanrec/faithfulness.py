@@ -7,6 +7,8 @@ Metrics:
   - Stability:           % seeds recovering the same operator (via MongoDB query)
   - Monotonicity audit:  violation rate per field
 """
+from collections import Counter
+
 import numpy as np
 import torch
 from sklearn.metrics import mean_squared_error
@@ -78,33 +80,75 @@ class FaithfulnessEvaluator:
         return report
 
     def monotonicity_audit(
-        self, expected_direction: dict[int, str]
-    ) -> dict[int, float]:
+        self,
+        field_indices: list[int] | None = None,
+        expected_direction: dict[int, str] | None = None,
+        field_names: list[str] | None = None,
+        tol: float = 1e-4,
+    ) -> dict[int, dict]:
         """
-        For each field in expected_direction, computes the fraction of
-        grid points where the learned curve violates the expected direction.
+        Audita la monotonia de las curvas phi_j aprendidas.
 
-        Args:
-            expected_direction: {field_idx: 'increasing' | 'decreasing'}
+        Dos modos:
+
+        1. **Descriptivo** (por defecto, sin `expected_direction`): mide que
+           fraccion de los tramos de cada curva va en la direccion MINORITARIA.
+           Un valor cercano a 0 significa curva monotona; cercano a 0.5,
+           curva sin direccion dominante. Es el modo apropiado para Criteo,
+           donde las variables I1..I13 son anonimas y no existe una direccion
+           "esperada" que se pueda afirmar sin inventarla.
+
+        2. **Contra expectativa** (pasando `expected_direction`): mide la tasa
+           de violacion respecto a una direccion de dominio conocida. Solo
+           tiene sentido cuando la semantica de la variable es conocida
+           (p.ej. "a mayor precio, menor score").
+
+        Se promedia sobre TODAS las dimensiones del embedding, no solo la 0:
+        afirmar que una curva es monotona mirando una sola de sus 16
+        proyecciones no lo demuestra (mismo criterio que en fit_field).
 
         Returns:
-            {field_idx: violation_rate}
+            {field_idx: {"violation_rate", "direction", "per_dim_rates"}}
         """
-        print("\n── Monotonicity audit ───────────────────────────────────────")
-        violations = {}
-        for j, direction in expected_direction.items():
+        print("\n── Auditoria de monotonia ───────────────────────────────────")
+        if field_indices is None:
+            field_indices = list(range(self.model.numerical_encoder.num_fields))
+
+        results = {}
+        for j in field_indices:
             x_grid, y_curves = self.model.numerical_encoder.get_spline_curves(j)
-            y  = y_curves[:, 0].numpy()
-            diffs = np.diff(y)
-            if direction == "increasing":
-                n_viol = int(np.sum(diffs < -1e-4))
-            else:
-                n_viol = int(np.sum(diffs >  1e-4))
-            rate = n_viol / len(diffs)
-            violations[j] = rate
-            status = "✓ OK" if rate < 0.05 else "⚠ VIOLATES"
-            print(f"  F{j} ({direction}): violation_rate={rate:.2%}  {status}")
-        return violations
+            per_dim_rates, per_dim_dirs = [], []
+
+            for d in range(y_curves.shape[1]):
+                diffs = np.diff(y_curves[:, d].numpy())
+                n_up = int(np.sum(diffs > tol))
+                n_down = int(np.sum(diffs < -tol))
+                n_moves = n_up + n_down
+                if n_moves == 0:            # curva plana
+                    per_dim_rates.append(0.0)
+                    per_dim_dirs.append("flat")
+                    continue
+                if expected_direction and j in expected_direction:
+                    want = expected_direction[j]
+                    rate = (n_down if want == "increasing" else n_up) / len(diffs)
+                    per_dim_dirs.append(want)
+                else:
+                    # descriptivo: la direccion minoritaria es la "violacion"
+                    rate = min(n_up, n_down) / len(diffs)
+                    per_dim_dirs.append("increasing" if n_up >= n_down else "decreasing")
+                per_dim_rates.append(rate)
+
+            rate_mean = float(np.mean(per_dim_rates))
+            dominant = Counter(per_dim_dirs).most_common(1)[0][0]
+            name = field_names[j] if field_names else f"I{j+1}"
+            results[j] = {"field": name, "violation_rate": rate_mean,
+                          "violation_rate_std": float(np.std(per_dim_rates)),
+                          "direction": dominant, "per_dim_rates": per_dim_rates}
+            status = "monotona" if rate_mean < 0.05 else (
+                     "casi monotona" if rate_mean < 0.15 else "NO monotona")
+            print(f"  {name:>5} ({dominant:>10}): violacion={rate_mean:.2%} "
+                  f"±{np.std(per_dim_rates):.2%}  {status}")
+        return results
 
     def update_gap_in_mongo(
         self, dataset: str, seed: int, gap_rmse: float

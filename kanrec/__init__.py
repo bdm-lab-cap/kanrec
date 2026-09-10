@@ -21,6 +21,8 @@ _LAZY: dict[str, str] = {
     "SymbolicExtractor": ".symbolic",
     "FaithfulnessEvaluator": ".faithfulness",
     "substitution_ablation": ".ablation",
+    "measure_latency": ".latency",
+    "compare_latency": ".latency",
     "MongoSymbolicStore": ".mongo_store",
     "get_secret": ".config",
     "atlas_uri": ".config",
@@ -37,6 +39,7 @@ if TYPE_CHECKING:  # pragma: no cover - static analysers only
     from .spark_utils import apply_pipeline_and_unpack, random_sample
     from .encoder import KANNumericalEncoder
     from .ablation import substitution_ablation
+    from .latency import compare_latency, measure_latency
     from .faithfulness import FaithfulnessEvaluator
     from .model import CTRModel, InteractionMLP, KANRecModel
     from .mongo_store import MongoSymbolicStore
