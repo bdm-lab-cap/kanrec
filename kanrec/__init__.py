@@ -22,6 +22,8 @@ _LAZY: dict[str, str] = {
     "FaithfulnessEvaluator": ".faithfulness",
     "substitution_ablation": ".ablation",
     "measure_latency": ".latency",
+    "VectorizedKANEncoder": ".vectorized",
+    "vectorize_model": ".vectorized",
     "compare_latency": ".latency",
     "MongoSymbolicStore": ".mongo_store",
     "get_secret": ".config",
@@ -40,6 +42,7 @@ if TYPE_CHECKING:  # pragma: no cover - static analysers only
     from .encoder import KANNumericalEncoder
     from .ablation import substitution_ablation
     from .latency import compare_latency, measure_latency
+    from .vectorized import VectorizedKANEncoder, vectorize_model
     from .faithfulness import FaithfulnessEvaluator
     from .model import CTRModel, InteractionMLP, KANRecModel
     from .mongo_store import MongoSymbolicStore
