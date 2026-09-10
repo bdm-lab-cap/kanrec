@@ -37,28 +37,43 @@
 import json, os
 import numpy as np
 from pyspark.sql import functions as F
-from pyspark.ml import Pipeline
-from pyspark.ml.feature import VectorAssembler, StandardScaler, StringIndexer
-from kanrec.spark_utils import apply_pipeline_and_unpack
 
 NUMERICAL_COLS   = [f"I{i}" for i in range(1, 14)]
 CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
 LOG_COLS = [f"I{i}" for i in range(1, 6)]   # log1p (recuento/frecuencia)
 STD_COLS = [f"I{i}" for i in range(6, 14)]  # StandardScaler (magnitud libre)
 
-# Limpiar artefactos de ejecuciones anteriores antes de regenerar. Un
-# PipelineModel serializado o una tabla Delta de una corrida previa puede
-# quedar en un estado que aborta el saveAsTable con
-# "MALFORMED_RECORD_IN_PARSING [null,null,null]". Empezar en limpio elimina
-# esa clase de fallo. (En Fabric notebookutils.fs.rm siempre existe.)
+# Limpiar artefactos de ejecuciones anteriores antes de regenerar.
+#
+# CAUSA RAIZ del fallo que costo varias ejecuciones (verificado): borrar solo
+# los ficheros con notebookutils.fs.rm deja la ENTRADA DEL CATALOGO apuntando
+# a una ruta que ya no existe. Esa entrada huerfana hace que el siguiente
+# saveAsTable aborte con "MALFORMED_RECORD_IN_PARSING [null,null,null] /
+# Parse Mode: FAILFAST" -- un mensaje enganoso, porque en ese punto no hay
+# ningun parseo de texto (los datos vienen de Delta/Parquet).
+#
+# Hay que hacer las DOS cosas y en este orden: DROP TABLE (catalogo) y
+# despues fs.rm (ficheros). Descartadas por el camino, con evidencia, estas
+# otras hipotesis: el TSV, el reparseo de CSV, el StringIndexer, el
+# PipelineModel serializado, el tamano del plan y la cache de metadatos.
 try:
     import notebookutils
-    for _p in ["Files/models/mlllib_pipeline", "Tables/train", "Tables/val", "Tables/test"]:
+
+    for _t in ["train", "val", "test", "_raw_ingested", "cat_index_maps"]:
         try:
-            notebookutils.fs.rm(_p, recurse=True)
-            print(f"Limpiado artefacto previo: {_p}")
+            spark.sql(f"DROP TABLE IF EXISTS {_t}")   # catalogo
         except Exception:
-            pass  # no existia, normal en la primera ejecucion
+            pass
+        try:
+            notebookutils.fs.rm(f"Tables/{_t}", recurse=True)  # ficheros
+        except Exception:
+            pass
+        print(f"Limpiado artefacto previo: {_t}")
+
+    try:
+        notebookutils.fs.rm("Files/models/mlllib_pipeline", recurse=True)
+    except Exception:
+        pass
 except ImportError:
     pass  # fuera de Fabric (tests locales)
 
@@ -96,6 +111,19 @@ for c in NUMERICAL_COLS:
     raw = raw.withColumn(c, F.when(F.col(c).isNull(), 0.0)
                            .otherwise(F.abs(F.col(c))))
 
+# CLAVE: materializar 'raw' a una tabla Delta ANTES de cualquier split o
+# pipeline. El CSV de Criteo provoca "MALFORMED_RECORD_IN_PARSING
+# [null,null,null]" al reparsearse en ciertas particiones durante el
+# saveAsTable final (randomSplit reordena las particiones, forzando a Spark
+# a reparsear el TSV en trozos que un count() no toca). Una vez los datos
+# estan en Delta, no hay reparseo de CSV posible aguas abajo: split,
+# pipeline y escrituras leen todos de Delta. Es un arreglo estructural,
+# no un parche sobre el sintoma.
+print("Materializing raw to Delta (avoids CSV re-parsing downstream)...")
+raw.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("_raw_ingested")
+raw = spark.read.table("_raw_ingested")
+print(f"  raw materialized: {raw.count():,} rows")
+
 total = raw.count()
 print(f"Total rows: {total:,}")
 
@@ -110,25 +138,110 @@ train_log = log1p_safe(train_raw, LOG_COLS)
 val_log   = log1p_safe(val_raw,   LOG_COLS)
 test_log  = log1p_safe(test_raw,  LOG_COLS)
 
-assembler = VectorAssembler(inputCols=STD_COLS, outputCol="num_raw", handleInvalid="keep")
-scaler    = StandardScaler(inputCol="num_raw", outputCol="num_scaled", withMean=True, withStd=True)
-indexers  = [StringIndexer(inputCol=c, outputCol=f"{c}_idx", handleInvalid="keep")
-             for c in CATEGORICAL_COLS]
+# ── Normalizacion numerica (StandardScaler nativo, columna a columna) ───────
+# Se calcula media y desviacion sobre TRAIN y se aplica a los tres splits.
+# Se hace con agg nativo en vez de VectorAssembler+StandardScaler para no
+# depender de un PipelineModel serializado (que en Fabric daba problemas al
+# recargarse) y para dejar las columnas ya como escalares, sin el paso de
+# desempaquetar el vector.
+print("Fitting StandardScaler (native) on TRAIN...")
+_stats = train_log.select(
+    *[F.mean(c).alias(f"m_{c}") for c in STD_COLS],
+    *[F.stddev(c).alias(f"s_{c}") for c in STD_COLS],
+).collect()[0]
+scaler_stats = {c: (float(_stats[f"m_{c}"]),
+                    float(_stats[f"s_{c}"]) if _stats[f"s_{c}"] and _stats[f"s_{c}"] > 0 else 1.0)
+                for c in STD_COLS}
 
-pipeline = Pipeline(stages=[assembler, scaler] + indexers)
-print("Fitting MLlib Pipeline on TRAIN...")
-pm = pipeline.fit(train_log)
-pm.write().overwrite().save("Files/models/mlllib_pipeline")
+def apply_scaler(df):
+    for c in STD_COLS:
+        m, s = scaler_stats[c]
+        df = df.withColumn(c, (F.col(c) - F.lit(m)) / F.lit(s))
+    return df
 
+# ── Indexado categorico (nativo, join broadcast) ────────────────────────────
+# NO se usa StringIndexer: su serializador interno de metadatos parsea como
+# CSV en modo FAILFAST y aborta con "MALFORMED_RECORD_IN_PARSING
+# [null,null,null]" cuando un valor categorico contiene caracteres que
+# parecen un registro CSV malformado (comillas, comas) -- frecuente en los
+# hashes de Criteo. Verificado: el StringIndexer era la etapa exacta que
+# fallaba (PASO C del diagnostico). El indexado nativo por frecuencia
+# descendente (empate alfabetico ascendente) es equivalente funcional y no
+# tiene ese parser. El mapa se ajusta sobre TRAIN; categorias no vistas en
+# val/test y nulos van al indice len(categorias) (como handleInvalid="keep").
+from pyspark.sql import Window
 
-train_t = apply_pipeline_and_unpack(train_log, pm, STD_COLS)
-val_t   = apply_pipeline_and_unpack(val_log,   pm, STD_COLS)
-test_t  = apply_pipeline_and_unpack(test_log,  pm, STD_COLS)
+def build_index_map(train_df, col):
+    w = Window.orderBy(F.col("count").desc(), F.col(col).asc())
+    mapping = (train_df.groupBy(col).count()
+               .withColumn(f"{col}_idx", (F.row_number().over(w) - 1).cast("int"))
+               .select(col, f"{col}_idx"))
+    return mapping, mapping.count()
+
+print("Building categorical index maps on TRAIN...")
+index_maps = {}
+for c in CATEGORICAL_COLS:
+    index_maps[c] = build_index_map(train_log, c)
+
+def apply_scaler_and_index(df, name):
+    """
+    Aplica el scaler y los 26 indexados categoricos, MATERIALIZANDO cada
+    CHUNK columnas.
+
+    Por que se materializa por bloques (verificado con df.explain sobre el
+    plan real en Fabric): encadenar los 26 broadcast joins en un unico plan
+    genera un arbol enorme -- cada join arrastra su propio FileScan de
+    _raw_ingested mas un Sort con Exchange SinglePartition. El motor aborta
+    ese plan con un "MALFORMED_RECORD_IN_PARSING [null,null,null]" espurio
+    (el plan NO contiene ningun Scan csv: no es un error de datos, es el
+    tamano del plan). Cortar el linaje cada pocas columnas mantiene cada
+    plan pequeno y evita el fallo.
+    """
+    df = apply_scaler(df)
+    CHUNK = 6
+    for i in range(0, len(CATEGORICAL_COLS), CHUNK):
+        for c in CATEGORICAL_COLS[i:i + CHUNK]:
+            mapping, n_cats = index_maps[c]
+            df = (df.join(F.broadcast(mapping), on=c, how="left")
+                    .withColumn(f"{c}_idx",
+                                F.coalesce(F.col(f"{c}_idx"), F.lit(n_cats)).cast("int")))
+        tmp = f"_tmp_{name}_{i}"
+        df.write.format("delta").mode("overwrite") \
+          .option("overwriteSchema", "true").saveAsTable(tmp)
+        df = spark.read.table(tmp)          # corta el linaje del plan
+        print(f"  {name}: {min(i + CHUNK, len(CATEGORICAL_COLS))}/{len(CATEGORICAL_COLS)} categoricas indexadas")
+    return df
+
+print("Transforming splits (materializando por bloques)...")
+train_t = apply_scaler_and_index(train_log, "train")
+val_t   = apply_scaler_and_index(val_log,   "val")
+test_t  = apply_scaler_and_index(test_log,  "test")
 
 selection = {"selected": NUMERICAL_COLS, "excluded": [], "chisq_ranking": NUMERICAL_COLS, "spearman_scores": {}}
 os.makedirs("/lakehouse/default/Files/config", exist_ok=True)
 with open("/lakehouse/default/Files/config/feature_selection.json", "w") as f:
     json.dump(selection, f, indent=2)
+
+# Guardar los estadisticos del StandardScaler (media/desviacion por columna,
+# ajustados en TRAIN) para que 06_stream_processing pueda aplicar EXACTAMENTE
+# la misma normalizacion al stream sin recalcular -- que es el objetivo de
+# consistencia batch/stream que antes daba el PipelineModel serializado.
+with open("/lakehouse/default/Files/config/scaler_stats.json", "w") as f:
+    json.dump({c: {"mean": scaler_stats[c][0], "std": scaler_stats[c][1]} for c in STD_COLS}, f, indent=2)
+print("Saved scaler_stats.json (mean/std por columna para el stream).")
+
+# Persistir los mapas de indices categoricos como una tabla, para que
+# 06_stream_processing aplique EXACTAMENTE el mismo indexado al stream (misma
+# consistencia batch/stream que antes daba el PipelineModel). Se guarda una
+# sola tabla larga (columna, valor, indice) con todas las categorias.
+_index_rows = None
+for c in CATEGORICAL_COLS:
+    mapping, _ = index_maps[c]
+    tagged = mapping.withColumnRenamed(c, "value").withColumnRenamed(f"{c}_idx", "idx") \
+                    .withColumn("column", F.lit(c))
+    _index_rows = tagged if _index_rows is None else _index_rows.unionByName(tagged)
+_index_rows.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("cat_index_maps")
+print("Saved cat_index_maps table (para reindexar el stream igual que el batch).")
 
 # Escritura como TABLA GESTIONADA del catalogo (saveAsTable), NO por ruta
 # (.save("Tables/train")). En Fabric, .save() a una ruta escribe los ficheros
@@ -172,10 +285,32 @@ if bad:
     raise RuntimeError(
         f"La tabla 'train' escrita NO esta normalizada: {bad} tienen stddev>5 "
         f"(deberia ser ~1.0). El StandardScaler no llego a estas columnas. "
-        f"Revisa que apply_pipeline_and_unpack se aplico y que la escritura "
-        f"Delta apunta a la tabla correcta. NO ejecutes 04/05 hasta arreglar esto."
+        f"Revisa apply_scaler_and_index y que la escritura Delta apunte a la "
+        f"tabla correcta. NO ejecutes 04/05 hasta arreglar esto."
     )
 print("\n✓ Verificacion OK: la tabla 'train' escrita esta normalizada (I6..I13 stddev~1).")
+
+# Limpiar las tablas intermedias creadas para romper el plan.
+# DROP TABLE + fs.rm, en ese orden: dejar la entrada del catalogo huerfana
+# es lo que corrompia el catalogo y hacia fallar la siguiente ejecucion.
+try:
+    import notebookutils
+    _tmp_tables = [f"_tmp_{_n}_{_i}"
+                   for _n in ["train", "val", "test"]
+                   for _i in range(0, len(CATEGORICAL_COLS), 6)]
+    for _t in _tmp_tables + ["_raw_ingested"]:
+        try:
+            spark.sql(f"DROP TABLE IF EXISTS {_t}")
+        except Exception:
+            pass
+        try:
+            notebookutils.fs.rm(f"Tables/{_t}", recurse=True)
+        except Exception:
+            pass
+    print("Tablas temporales limpiadas.")
+except ImportError:
+    pass
+
 print("Done.")
 
 

@@ -26,10 +26,9 @@
 # just "the same Pipeline object" — that part was already true and was
 # never the bug).
 
+import json
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col
-from pyspark.ml import PipelineModel
-from kanrec.spark_utils import apply_pipeline_and_unpack
 import pandas as pd
 
 NUMERICAL_COLS   = [f"I{i}" for i in range(1, 14)]
@@ -37,14 +36,20 @@ CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
 LOG_COLS = [f"I{i}" for i in range(1, 6)]
 STD_COLS = [f"I{i}" for i in range(6, 14)]
 
-print("Loading MLlib Pipeline...")
-pipeline_model = PipelineModel.load("Files/models/mlllib_pipeline")
+# Cargar los estadisticos del scaler y los mapas de indices que ESCRIBIO 01.
+# 01 dejo de usar el PipelineModel de MLlib (su StringIndexer abortaba con
+# valores categoricos que parecen registros CSV malformados). En su lugar
+# guardo scaler_stats.json y la tabla cat_index_maps, que 06 reutiliza aqui
+# para aplicar EXACTAMENTE la misma transformacion al stream que al batch.
+print("Loading scaler stats and categorical index maps from 01...")
+with open("/lakehouse/default/Files/config/scaler_stats.json") as f:
+    scaler_stats = json.load(f)
+index_maps_df = spark.read.table("cat_index_maps")  # columnas: column, value, idx
 
 print("Reading streaming_kfk...")
 raw = spark.read.table("streaming_kfk")
 print(f"Rows: {raw.count():,}")
 
-# Flatten numerical/categorical structs
 flat = raw.select(
     col("timestamp"), col("label").cast("integer"),
     *[col(f"numerical.{c}").alias(c) for c in NUMERICAL_COLS],
@@ -52,20 +57,30 @@ flat = raw.select(
 )
 
 for c in NUMERICAL_COLS:
-    flat = flat.withColumn(c, F.when(F.col(c).isNull(), 0.0).otherwise(F.abs(F.col(c).cast("float"))))
+    flat = flat.withColumn(c, F.when(F.col(c).isNull(), 0.0).otherwise(F.abs(F.col(c))))
 for c in LOG_COLS:
     flat = flat.withColumn(c, F.log1p(F.greatest(F.col(c), F.lit(0.0))))
 
-# Same helper as 01: applies the fitted Pipeline AND unpacks StandardScaler's
-# vector output back into I6..I13, instead of leaving it in an unused column.
-processed = apply_pipeline_and_unpack(flat, pipeline_model, STD_COLS)
+# StandardScaler nativo con los stats de TRAIN (misma media/desviacion que el batch)
+for c in STD_COLS:
+    m, s = scaler_stats[c]["mean"], scaler_stats[c]["std"]
+    flat = flat.withColumn(c, (F.col(c) - F.lit(m)) / F.lit(s if s else 1.0))
 
+# Indexado categorico con los mapas de TRAIN (join broadcast, no-vistas -> n_cats)
+for c in CATEGORICAL_COLS:
+    mp = (index_maps_df.filter(F.col("column") == c)
+          .select(F.col("value").alias(c), F.col("idx").alias(f"{c}_idx")))
+    n_cats = mp.count()
+    flat = (flat.join(F.broadcast(mp), on=c, how="left")
+                .withColumn(f"{c}_idx", F.coalesce(F.col(f"{c}_idx"), F.lit(n_cats)).cast("int")))
+
+processed = flat
 output_cols = (
     ["timestamp", "label"] + NUMERICAL_COLS
     + [f"C{i}_idx" for i in range(1, 27) if f"C{i}_idx" in processed.columns]
 )
 stream_processed = processed.select(output_cols)
-stream_processed.write.format("delta").mode("overwrite").save("Tables/streaming_processed")
+stream_processed.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("streaming_processed")
 
 # ── Verificacion (guardar para el Anexo D) ─────────────────────────────────
 print("\nVerificacion — I6..I13 en el stream (esperado: mean~0, stddev~1, igual que en 01):")
