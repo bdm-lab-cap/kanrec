@@ -6,7 +6,8 @@
 
 > **Origen de las tablas.** Todas las que consume este panel las crean los
 > notebooks de Fabric, ninguna se construye a mano:
-> `experiment_results` ← `04`; `streaming_raw`/`streaming_processed` ← `02`/`06`;
+> `experiment_results` ← `04`; `streaming_kfk` ← Eventstream (Confluent);
+> `streaming_processed` ← `06`;
 > `symbolic_results`, `spline_curves` y `baseline_metrics` ← `05` (celda final).
 
 ## Estructura del dashboard (4 páginas)
@@ -30,7 +31,7 @@
 - `kanrec_lakehouse.experiment_results` → métricas de entrenamiento
 - `kanrec_lakehouse.symbolic_results`   → fórmulas extraídas por campo/seed
 - `kanrec_lakehouse.baseline_metrics`   → thresholds para alertas
-- `kanrec_lakehouse.streaming_raw`      → datos en tiempo real (Página 4)
+- `kanrec_lakehouse.streaming_processed` → datos en tiempo real (Página 4)
 - `kanrec_lakehouse.spline_curves`      → curvas φ evaluadas en grid (Página 1)
 
 ---
@@ -157,6 +158,6 @@ curves_df.to_parquet("spline_curves.parquet", index=False)
 - **Tabla de ablaciones**: grid_size vs AUC
 
 ### Página 4: Real-Time CTR
-- **Gráfico de líneas en tiempo real** (streaming_raw): clics por minuto
+- **Gráfico de líneas en tiempo real** (streaming_processed): clics por minuto
 - **KPI card**: CTR actual vs baseline
 - **Mapa de calor**: distribución de features numéricas del stream

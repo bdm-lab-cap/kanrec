@@ -373,7 +373,7 @@ print("\nablation_report.json guardado en Files/results/")
 # TABLAS DELTA PARA POWER BI
 # ============================================================================
 # powerbi/README.md documenta cinco tablas, de las que solo existian dos
-# (experiment_results y streaming_raw). Las tres que faltaban se escriben
+# (experiment_results y streaming_processed). Las tres que faltaban se escriben
 # aqui, de modo que el panel sea reproducible en lugar de construirse a mano:
 #
 #   symbolic_results  — una fila por campo y semilla, con operador y metricas

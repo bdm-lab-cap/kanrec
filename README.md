@@ -54,7 +54,7 @@ Symbolic extraction: **10/13 fields** accept an operator with R² > 0.90. Fields
 ┌─────────────────────────────────────────────────────────────────┐
 │  MICROSOFT FABRIC — workspace KAN-REC                           │
 │  01_spark_ingest_mlllib  → Delta Tables (8M/998K/1M rows)      │
-│  02_streaming_kafka      → Confluent → Eventstream → KQL+Delta  │
+│  Eventstream (gestionado)→ Confluent → streaming_kfk (KQL+Delta)│
 │  03_api_ingest           → item_metadata (1,396 items)          │
 │  04_model_comparison     → raw vs AutoDis vs KAN-REC, 3 seeds   │
 │                             (sustituye a 04/07/08; ver nota abajo)│
@@ -159,13 +159,14 @@ kanrec/
 │   └── kafka_producer_confluent.py # Confluent Cloud producer
 ├── fabric/                        # Microsoft Fabric notebooks
 │   ├── 01_spark_ingest_mlllib.py
-│   ├── 02_streaming_kafka.py
 │   ├── 03_api_ingest.py
 │   ├── 04_model_comparison.py     # sustituye a 04_training_kanrec,
 │   │                               # 07_autodis_baseline y 08_comparativa_encoders
 │   ├── 05_symbolic_extraction.py
 │   ├── 06_stream_processing.py
-│   └── 09_mongodb_vector_search.py
+│   ├── 09_mongodb_vector_search.py
+│   ├── pipeline_kanrec_end_to_end.json  # orquestacion
+│   └── PIPELINE_README.md
 ├── kanrec/                        # Installable Python package
 │   ├── encoder.py                 # KANNumericalEncoder
 │   ├── model.py                   # KANRecModel

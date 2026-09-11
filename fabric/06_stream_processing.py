@@ -1,6 +1,8 @@
 # Microsoft Fabric Notebook — 06_stream_processing
 # Processes streaming_kfk with the pre-fitted MLlib Pipeline from 01.
-# Run AFTER 02_streaming_kafka. Attach kanrec_lakehouse before running.
+# Consume la tabla 'streaming_kfk' que alimenta Eventstream desde Confluent
+# Cloud. Requiere que el Eventstream este activo y haya recibido eventos.
+# Attach kanrec_lakehouse before running.
 #
 # Requires the kanrec package installed in this session:
 #   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
