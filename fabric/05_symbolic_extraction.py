@@ -436,16 +436,26 @@ if _curve_rows:
 # ── baseline_metrics ───────────────────────────────────────────────────────
 try:
     _exp = spark.read.table("experiment_results")
-    (_exp.groupBy("encoder")
-        .agg(F.avg("test_auc").alias("auc_mean"),
-             F.stddev("test_auc").alias("auc_std"),
-             F.avg("test_logloss").alias("logloss_mean"),
-             F.stddev("test_logloss").alias("logloss_std"),
-             F.avg("train_seconds").alias("train_seconds_mean"),
-             F.count("*").alias("n_seeds"))
+    # Se agregan SOLO las columnas presentes: el esquema de
+    # experiment_results varia entre la version trial (sin tiempos) y la
+    # completa. Construir la lista dinamicamente evita que la tabla entera
+    # falle por una columna opcional ausente.
+    _cols = set(_exp.columns)
+    _aggs = [F.count("*").alias("n_seeds")]
+    if "test_auc" in _cols:
+        _aggs += [F.avg("test_auc").alias("auc_mean"),
+                  F.stddev("test_auc").alias("auc_std")]
+    if "test_logloss" in _cols:
+        _aggs += [F.avg("test_logloss").alias("logloss_mean"),
+                  F.stddev("test_logloss").alias("logloss_std")]
+    if "train_seconds" in _cols:
+        _aggs += [F.avg("train_seconds").alias("train_seconds_mean")]
+
+    (_exp.groupBy("encoder").agg(*_aggs)
         .write.format("delta").mode("overwrite")
         .option("overwriteSchema", "true").saveAsTable("baseline_metrics"))
-    print("  baseline_metrics: resumen por encoder")
+    print(f"  baseline_metrics: resumen por encoder "
+          f"({len(_aggs)} metricas desde {sorted(_cols)})")
 except Exception as _e:
     print(f"  (baseline_metrics omitida: {_e})")
 
