@@ -15,6 +15,8 @@ from typing import Optional
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.collection import Collection
 
+from .schema import NATURAL_KEY, SymbolicResult
+
 
 class MongoSymbolicStore:
     """
@@ -40,6 +42,35 @@ class MongoSymbolicStore:
         self.col.create_index([("field_name", ASCENDING), ("operator", ASCENDING)])
         self.col.create_index([("timestamp", DESCENDING)])
         self.col.create_index([("run_id", ASCENDING)])
+        # Indice UNICO sobre la clave natural: reimportar los mismos resultados
+        # actualiza en vez de duplicar. Antes, cada reejecucion del importador
+        # anadia copias y el informe de estabilidad contaba semillas de mas.
+        self.col.create_index(
+            [(k, ASCENDING) for k in NATURAL_KEY], unique=True, name="natural_key"
+        )
+
+    # ── Escritura con el esquema unico ────────────────────────────────────────
+
+    def upsert_results(self, results: list) -> int:
+        """
+        Inserta o actualiza una lista de `SymbolicResult` usando la clave
+        natural. Devuelve cuantos documentos se han escrito.
+
+        Es el unico punto de entrada recomendado: garantiza que todos los
+        documentos comparten esquema, porque se construyen con
+        `SymbolicResult.to_document()`.
+        """
+        from pymongo import UpdateOne
+
+        if not results:
+            return 0
+        ops = []
+        for r in results:
+            doc = r.to_document()
+            key = {k: doc[k] for k in NATURAL_KEY}
+            ops.append(UpdateOne(key, {"$set": doc}, upsert=True))
+        res = self.col.bulk_write(ops)
+        return res.upserted_count + res.modified_count
 
     # ── Write ─────────────────────────────────────────────────────────────────
 

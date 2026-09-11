@@ -4,6 +4,11 @@
 # Este archivo documenta cómo conectar Power BI a OneLake y
 # las medidas DAX necesarias para el dashboard de KAN-REC.
 
+> **Origen de las tablas.** Todas las que consume este panel las crean los
+> notebooks de Fabric, ninguna se construye a mano:
+> `experiment_results` ← `04`; `streaming_raw`/`streaming_processed` ← `02`/`06`;
+> `symbolic_results`, `spline_curves` y `baseline_metrics` ← `05` (celda final).
+
 ## Estructura del dashboard (4 páginas)
 
 ### Página 1: Curvas φ — Encoding por campo numérico
@@ -95,7 +100,7 @@ AVERAGEX(
 
 ---
 
-## Tabla spline_curves (generada desde Colab)
+## Tabla spline_curves (generada por fabric/05_symbolic_extraction.py)
 
 Esta tabla se genera en Colab tras el entrenamiento y se sube a OneLake.
 Contiene las curvas φ evaluadas en 300 puntos por campo numérico.

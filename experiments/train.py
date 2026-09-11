@@ -44,7 +44,10 @@ DEFAULT_LR = {"raw": 1e-3, "autodis": 1e-2, "kan-bspline": 1e-3}
 
 
 def train(config: dict) -> float:
-    torch.manual_seed(config["seed"])
+    # Fija los cuatro generadores (torch, numpy, random, cuda), no solo el de
+    # torch: sin ello la reproducibilidad declarada seria parcial.
+    from kanrec.reproducibility import set_seed
+    set_seed(config["seed"])
     # mlflow>=3.0 dejo el backend de fichero ("./mlruns") en modo
     # mantenimiento y lo bloquea por defecto, exigiendo un backend de base
     # de datos. sqlite es la via soportada hacia delante (no depende de

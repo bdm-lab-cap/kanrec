@@ -367,3 +367,86 @@ _ablation = substitution_ablation(_model, _loader, _results,
 with open("/lakehouse/default/Files/results/ablation_report.json", "w") as f:
     json.dump(_ablation, f, indent=2)
 print("\nablation_report.json guardado en Files/results/")
+
+
+# ============================================================================
+# TABLAS DELTA PARA POWER BI
+# ============================================================================
+# powerbi/README.md documenta cinco tablas, de las que solo existian dos
+# (experiment_results y streaming_raw). Las tres que faltaban se escriben
+# aqui, de modo que el panel sea reproducible en lugar de construirse a mano:
+#
+#   symbolic_results  — una fila por campo y semilla, con operador y metricas
+#   spline_curves     — el grid evaluado de cada curva phi, para graficarla
+#                       en Direct Lake (el visual mas ilustrativo del trabajo)
+#   baseline_metrics  — resumen por encoder para la pagina comparativa
+import pandas as pd
+from pyspark.sql import functions as F
+
+print(f"\n{'='*70}")
+print("ESCRITURA DE TABLAS DELTA PARA POWER BI")
+print(f"{'='*70}")
+
+# ── symbolic_results ───────────────────────────────────────────────────────
+_rows = []
+for _seed, _res in results_all_seeds.items():
+    for _field, _r in _res.items():
+        _rows.append({
+            "seed": int(_seed),
+            "field_name": _field,
+            "operator": _r["operator"],
+            "formula": _r["formula"],
+            "r2_mean": float(_r.get("r2_mean", _r["r2"])),
+            "r2_std": float(_r.get("r2_std", 0.0)),
+            "r2_min": float(_r.get("r2_min", _r["r2"])),
+            "operator_agreement": float(_r.get("operator_agreement", 1.0)),
+            "accepted": bool(_r["accepted"]),
+        })
+if _rows:
+    spark.createDataFrame(pd.DataFrame(_rows)) \
+        .write.format("delta").mode("overwrite") \
+        .option("overwriteSchema", "true").saveAsTable("symbolic_results")
+    print(f"  symbolic_results: {len(_rows)} filas")
+
+# ── spline_curves ──────────────────────────────────────────────────────────
+# El grid evaluado por campo y dimension. Permite dibujar phi_j en Power BI
+# directamente desde Delta, sin exportar imagenes.
+_curve_rows = []
+for _seed, _ck in checkpoints:
+    _m = load_model_from_checkpoint(_ck)
+    for _j in range(len(NUMERICAL_COLS)):
+        _xg, _yc = _m.numerical_encoder.get_spline_curves(_j, n_points=60)
+        _xn = _xg.numpy()
+        for _d in range(min(4, _yc.shape[1])):      # 4 dims bastan para el visual
+            _yd = _yc[:, _d].numpy()
+            for _i in range(len(_xn)):
+                _curve_rows.append({
+                    "seed": int(_seed),
+                    "field_name": NUMERICAL_COLS[_j],
+                    "dim": int(_d),
+                    "x": float(_xn[_i]),
+                    "phi": float(_yd[_i]),
+                })
+if _curve_rows:
+    spark.createDataFrame(pd.DataFrame(_curve_rows)) \
+        .write.format("delta").mode("overwrite") \
+        .option("overwriteSchema", "true").saveAsTable("spline_curves")
+    print(f"  spline_curves: {len(_curve_rows):,} puntos")
+
+# ── baseline_metrics ───────────────────────────────────────────────────────
+try:
+    _exp = spark.read.table("experiment_results")
+    (_exp.groupBy("encoder")
+        .agg(F.avg("test_auc").alias("auc_mean"),
+             F.stddev("test_auc").alias("auc_std"),
+             F.avg("test_logloss").alias("logloss_mean"),
+             F.stddev("test_logloss").alias("logloss_std"),
+             F.avg("train_seconds").alias("train_seconds_mean"),
+             F.count("*").alias("n_seeds"))
+        .write.format("delta").mode("overwrite")
+        .option("overwriteSchema", "true").saveAsTable("baseline_metrics"))
+    print("  baseline_metrics: resumen por encoder")
+except Exception as _e:
+    print(f"  (baseline_metrics omitida: {_e})")
+
+print("\nTablas listas para Power BI (Direct Lake).")
