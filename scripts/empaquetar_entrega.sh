@@ -18,7 +18,7 @@ mkdir -p "$SALIDA"/{memoria,codigo,resultados}
 
 # ── 1. Memoria y anexos ────────────────────────────────────────────────────
 echo "  memoria y anexos..."
-for f in "Memoria_TFM_KAN-REC.docx" "Anexos_TFM_KAN-REC.docx"; do
+for f in "Memoria_TFM_KAN-REC_v2.docx" "Anexos_TFM_KAN-REC_v2.docx"; do
     if [ -f "$RAIZ/docs/$f" ]; then
         cp "$RAIZ/docs/$f" "$SALIDA/memoria/"
     else
@@ -107,7 +107,7 @@ if grep -rlqs "mongodb+srv://[^<$]" "$SALIDA/codigo" \
          --exclude="empaquetar_entrega.sh" 2>/dev/null | sed 's/^/    /'
     FALLOS=1
 fi
-if [ ! -f "$SALIDA/memoria/Memoria_TFM_KAN-REC.docx" ]; then
+if [ ! -f "$SALIDA/memoria/Memoria_TFM_KAN-REC_v2.docx" ]; then
     echo "  ERROR: falta la memoria en .docx"; FALLOS=1
 fi
 if [ ! -f "$SALIDA/codigo/requirements.lock" ]; then

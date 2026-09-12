@@ -65,11 +65,11 @@ La solución fue vectorizar la evaluación en un único kernel mediante `torch.b
 | Solo encoder | 8,83 ms | **0,95 ms** | **9,27×** |
 | Tiempo en el encoder | 84,5 % | 35,5 % | — |
 | Throughput | 391.862 filas/s | **1.525.526 filas/s** | 3,89× |
-| **Sobrecoste vs. normalización** | **4,66×** | **1,15×** | — |
+| **Frente a la normalización directa** | **4,05×** | **1,04×** | — |
 
-La verificación crítica: la diferencia entre las salidas del modelo original y el vectorizado es **exactamente cero**, bit a bit. La optimización no altera el modelo, solo su velocidad, por lo que todos los resultados anteriores siguen siendo válidos.
+La verificación crítica es la equivalencia numérica: la diferencia máxima entre las salidas del modelo original y el vectorizado es **0,00 en la medición sobre GPU y 2,4·10⁻⁷ en CPU**, es decir, dentro de la precisión de coma flotante simple. La discrepancia entre ambos dispositivos es esperable —las rutinas de multiplicación matricial de cuBLAS y las de CPU aplican órdenes de reducción distintos—, y lo relevante es que en ningún caso excede la precisión del tipo de dato. La optimización no altera el modelo, solo su velocidad, por lo que todos los resultados anteriores siguen siendo válidos.
 
-Con el encoder vectorizado, KAN-REC pasa a ser **1,66× más rápido que AutoDis** (2,68 ms frente a 4,44 ms), lo que confirma la hipótesis de la propuesta inicial que la versión no optimizada había refutado.
+Con el encoder vectorizado, KAN-REC pasa a ser **1,66× más rápido que AutoDis** (2,68 ms frente a 4,44 ms) y queda a 0,10 ms de la normalización directa, lo que confirma la hipótesis de la propuesta inicial que la versión no optimizada había refutado.
 
 ### Resultado 6 — Circuito de datos completo y verificado
 
@@ -98,8 +98,8 @@ Diez millones de filas ingeridas y normalizadas con Spark, con verificación exp
 |---|---|---|
 | Encoders | raw / AutoDis / KAN, 3 semillas, backbone idéntico | Paridad con raw; KAN supera a AutoDis en 0,0035 |
 | Capacidad del spline | `grid_size` ∈ {5, 10, 20} | 10 óptimo; 5 pierde 0,0078; 20 diverge |
-| Latencia | Los 3 encoders + KAN vectorizado | KAN vectorizado 1,15× sobre raw y 1,66× más rápido que AutoDis |
-| Optimización | KAN original vs. vectorizado | 3,89× más rápido, salida bit a bit idéntica |
+| Latencia | Los 3 encoders + KAN vectorizado | KAN vectorizado a la par de raw (2,68 vs 2,58 ms) y 1,66× más rápido que AutoDis |
+| Optimización | KAN original vs. vectorizado | 3,89× más rápido, equivalencia dentro de la precisión de float32 |
 | Validación del extractor | Señal `sin(1,5x)` vs. señal lineal | R² lineal 0,601 vs. 0,937: el encoder sigue la forma real |
 | Fidelidad | Modelo original vs. con fórmulas sustituidas, 3 semillas | Error de curva 0,066 ± 0,003; Δ AUC 0,033 ± 0,004 |
 | Estabilidad | Extracción sobre 3 checkpoints independientes | 90,9 % de acuerdo |

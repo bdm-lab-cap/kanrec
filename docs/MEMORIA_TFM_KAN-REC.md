@@ -1,10 +1,10 @@
-# KAN-REC: Codificación Continua de Variables Numéricas y Extracción Simbólica de Reglas de Scoring para Sistemas de Recomendación
+# KAN-REC: Codificación Continua de Variables Numéricas y Extracción Simbólica de Reglas de Scoring para Sistemas de Recomendación (v2)
 
 **Trabajo Fin de Máster · Máster en Big Data & Data Engineering**
 
 Autor: Pedro Antonio Martínez Sánchez
 Tutores: Jorge Centeno y Alberto González
-Septiembre 2026
+Septiembre 2026 · Versión 2
 
 ---
 
@@ -16,9 +16,9 @@ KAN-REC sustituye esa discretización por un encoder basado en Kolmogorov-Arnold
 
 El trabajo se ha desarrollado sobre una arquitectura completa de ingeniería de datos en Microsoft Fabric: ingesta distribuida con Spark de 10 millones de impresiones del dataset Criteo, streaming en tiempo real desde Confluent Cloud a través de Eventstream, enriquecimiento vía API REST, almacenamiento en Delta Lake sobre OneLake, persistencia de resultados simbólicos en MongoDB Atlas con búsqueda vectorial, y explotación en Power BI mediante Direct Lake.
 
-Los resultados sobre tres semillas muestran que el encoder KAN alcanza un AUC de 0,7851 ± 0,0015, estadísticamente indistinguible de la normalización directa (0,7841 ± 0,0010) y superior a AutoDis (0,7816 ± 0,0012). La extracción simbólica converge a operadores lineales en los diez campos analizados, con acuerdo del 88 % al 100 % entre las dieciséis dimensiones del embedding y estabilidad del 90,9 % entre semillas; validaciones con formas funcionales conocidas confirman que se trata de una propiedad de los datos y no de una limitación del método. El perfilado identificó que el encoder consumía el 84,5 % del tiempo de inferencia; su vectorización —con salida bit a bit idéntica— lo acelera 9,27 veces y reduce el sobrecoste del modelo frente a la normalización directa de 4,66× a 1,15×.
+Los resultados sobre tres semillas muestran que el encoder KAN alcanza un AUC de 0,7851 ± 0,0015, estadísticamente indistinguible de la normalización directa (0,7841 ± 0,0010) y superior a AutoDis (0,7816 ± 0,0012). La extracción simbólica converge a operadores lineales en los diez campos analizados, con acuerdo del 88 % al 100 % entre las dieciséis dimensiones del embedding y estabilidad del 90,9 % entre semillas; validaciones con formas funcionales conocidas confirman que se trata de una propiedad de los datos y no de una limitación del método. El perfilado identificó que el encoder consumía el 84,5 % del tiempo de inferencia; su vectorización, cuya equivalencia numérica se verifica, lo acelera 9,27 veces y sitúa el modelo completo en 2,68 ms por lote, prácticamente a la par de los 2,58 ms de la normalización directa.
 
-La conclusión es que la interpretabilidad intrínseca del encoder KAN se obtiene con un sobrecoste del 15 % sobre el baseline más simple y con mejor rendimiento que el estado del arte en discretización.
+La conclusión es que la interpretabilidad intrínseca del encoder KAN se obtiene sin sobrecoste apreciable en inferencia respecto al baseline más simple, y con mejor rendimiento que el estado del arte en discretización.
 
 ---
 
@@ -363,11 +363,11 @@ La solución fue vectorizar la evaluación en un único kernel mediante `torch.b
 | Solo encoder | 8,83 ms | **0,95 ms** | **9,27×** |
 | Tiempo en el encoder | 84,5 % | 35,5 % | — |
 | Throughput | 391.862 filas/s | **1.525.526 filas/s** | 3,89× |
-| **Sobrecoste vs. normalización** | **4,66×** | **1,15×** | — |
+| **Frente a la normalización directa** | **4,05×** | **1,04×** | — |
 
-La verificación crítica: la diferencia entre las salidas del modelo original y el vectorizado es **exactamente cero**, bit a bit. La optimización no altera el modelo, solo su velocidad, por lo que todos los resultados anteriores siguen siendo válidos.
+La verificación crítica es la equivalencia numérica: la diferencia máxima entre las salidas del modelo original y el vectorizado es **0,00 en la medición sobre GPU y 2,4·10⁻⁷ en CPU**, es decir, dentro de la precisión de coma flotante simple. La discrepancia entre ambos dispositivos es esperable —las rutinas de multiplicación matricial de cuBLAS y las de CPU aplican órdenes de reducción distintos—, y lo relevante es que en ningún caso excede la precisión del tipo de dato. La optimización no altera el modelo, solo su velocidad, por lo que todos los resultados anteriores siguen siendo válidos.
 
-Con el encoder vectorizado, KAN-REC pasa a ser **1,66× más rápido que AutoDis** (2,68 ms frente a 4,44 ms), lo que confirma la hipótesis de la propuesta inicial que la versión no optimizada había refutado.
+Con el encoder vectorizado, KAN-REC pasa a ser **1,66× más rápido que AutoDis** (2,68 ms frente a 4,44 ms) y queda a 0,10 ms de la normalización directa, lo que confirma la hipótesis de la propuesta inicial que la versión no optimizada había refutado.
 
 ### Resultado 6 — Circuito de datos completo y verificado
 
@@ -396,8 +396,8 @@ Diez millones de filas ingeridas y normalizadas con Spark, con verificación exp
 |---|---|---|
 | Encoders | raw / AutoDis / KAN, 3 semillas, backbone idéntico | Paridad con raw; KAN supera a AutoDis en 0,0035 |
 | Capacidad del spline | `grid_size` ∈ {5, 10, 20} | 10 óptimo; 5 pierde 0,0078; 20 diverge |
-| Latencia | Los 3 encoders + KAN vectorizado | KAN vectorizado 1,15× sobre raw y 1,66× más rápido que AutoDis |
-| Optimización | KAN original vs. vectorizado | 3,89× más rápido, salida bit a bit idéntica |
+| Latencia | Los 3 encoders + KAN vectorizado | KAN vectorizado a la par de raw (2,68 vs 2,58 ms) y 1,66× más rápido que AutoDis |
+| Optimización | KAN original vs. vectorizado | 3,89× más rápido, equivalencia dentro de la precisión de float32 |
 | Validación del extractor | Señal `sin(1,5x)` vs. señal lineal | R² lineal 0,601 vs. 0,937: el encoder sigue la forma real |
 | Fidelidad | Modelo original vs. con fórmulas sustituidas, 3 semillas | Error de curva 0,066 ± 0,003; Δ AUC 0,033 ± 0,004 |
 | Estabilidad | Extracción sobre 3 checkpoints independientes | 90,9 % de acuerdo |
