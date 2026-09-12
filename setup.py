@@ -27,15 +27,34 @@ setup(
     # kanrec there must not touch it. Environments without Fabric's plugin
     # (local machine, Colab) install mlflow explicitly themselves and are
     # unaffected either way.
+    # Los minimos son DELIBERADAMENTE BAJOS, no descuidados.
+    #
+    # Fallo real verificado en Fabric: con "scipy>=1.12.0", al publicar el
+    # paquete en un entorno, pip actualizo el scipy que Fabric ya traia
+    # preinstalado y dejo una instalacion mixta -- los .so compilados de una
+    # version y los ficheros Python de otra. Resultado:
+    #   ImportError: cannot import name '_promote' from
+    #                scipy.spatial.transform._rotation
+    # y todo el runtime inutilizable. El mismo riesgo tenian scikit-learn,
+    # pandas y pyarrow, cuyos minimos eran mas nuevos que los del runtime.
+    #
+    # El criterio ahora es: declarar la version mas baja que el codigo
+    # realmente soporta, para que las preinstaladas de Fabric la satisfagan
+    # y pip no toque nada. Lo que el codigo usa de cada una:
+    #   scipy        -> optimize.curve_fit (estable desde hace anos)
+    #   scikit-learn -> metrics.roc_auc_score, log_loss, mean_squared_error
+    #   torch        -> nn.SiLU, linalg.lstsq(driver=), bmm, clamp
+    #   pandas       -> DataFrame, read_csv, to_parquet
+    #   pyarrow      -> backend de parquet
     install_requires=[
-        "torch>=2.2.0",
-        "scipy>=1.12.0",
-        "scikit-learn>=1.4.0",
-        # <3.0.0: pandas 3.x rompe herramientas propias de Microsoft Fabric
-        # (ds-copilot exige pandas<3.0.0) al instalar kanrec en un notebook.
-        "pandas>=2.2.0,<3.0.0",
-        "pyarrow>=15.0.0",
-        "pymongo>=4.6.0",
+        "torch>=1.13.0",
+        "scipy>=1.7.0",
+        "scikit-learn>=1.0.0",
+        # El techo <3.0.0 SI se mantiene: pandas 3.x rompe herramientas
+        # propias de Fabric (ds-copilot exige pandas<3.0.0).
+        "pandas>=1.5.0,<3.0.0",
+        "pyarrow>=10.0.0",
+        "pymongo>=4.0.0",
     ],
     extras_require={
         "dev": [

@@ -88,3 +88,65 @@ class TestSetSeed:
         assert torch.backends.cudnn.benchmark is False
         # Restaurar para no afectar a otros tests
         torch.backends.cudnn.deterministic = False
+
+
+class TestDependenciasCompatiblesConFabric:
+    """
+    Los minimos de version declarados no deben ser mas nuevos que los del
+    runtime de Fabric, o pip los actualizara al instalar el paquete en un
+    entorno y dejara una instalacion mixta.
+
+    Fallo real: con `scipy>=1.12.0` el entorno quedo con los .so de una
+    version y los .py de otra, y todo el runtime dejo de funcionar con
+    `ImportError: cannot import name '_promote'`. El mismo riesgo tenian
+    scikit-learn, pandas y pyarrow.
+    """
+
+    #: Versiones de referencia del runtime de Fabric (Spark 3.5 / Python 3.11).
+    #: Declarar un minimo por encima de estas provoca una actualizacion.
+    RUNTIME_FABRIC = {
+        "torch": (2, 0),
+        "scipy": (1, 11),
+        "scikit-learn": (1, 3),
+        "pandas": (2, 0),
+        "pyarrow": (14, 0),
+    }
+
+    def _minimos_declarados(self) -> dict:
+        import re
+        from pathlib import Path
+
+        setup = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+        bloque = setup.split("install_requires=[")[1].split("]")[0]
+        minimos = {}
+        for linea in bloque.split("\n"):
+            m = re.search(r'"([a-zA-Z0-9_.-]+)>=(\d+)\.(\d+)', linea)
+            if m:
+                minimos[m.group(1)] = (int(m.group(2)), int(m.group(3)))
+        return minimos
+
+    def test_los_minimos_no_fuerzan_actualizacion_en_fabric(self):
+        declarados = self._minimos_declarados()
+        assert declarados, "no se pudieron leer los minimos de setup.py"
+
+        conflictos = [
+            f"{paquete}>={v[0]}.{v[1]} supera el runtime "
+            f"({self.RUNTIME_FABRIC[paquete][0]}.{self.RUNTIME_FABRIC[paquete][1]})"
+            for paquete, v in declarados.items()
+            if paquete in self.RUNTIME_FABRIC and v > self.RUNTIME_FABRIC[paquete]
+        ]
+        assert not conflictos, (
+            "Estos minimos provocarian que pip actualice paquetes del runtime "
+            "de Fabric y rompa la instalacion:\n  - " + "\n  - ".join(conflictos)
+        )
+
+    def test_mlflow_sigue_fuera_de_las_dependencias_base(self):
+        """
+        mlflow debe permanecer en el extra [train]: instalarlo en Fabric
+        sobreescribe el suyo y rompe el plugin synapse.ml.mlflow.
+        """
+        from pathlib import Path
+
+        setup = (Path(__file__).resolve().parent.parent / "setup.py").read_text()
+        base = setup.split("install_requires=[")[1].split("]")[0]
+        assert "mlflow" not in base, "mlflow ha vuelto a las dependencias base"
