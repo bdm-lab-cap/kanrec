@@ -1,0 +1,4 @@
+{
+  "api_base": "https://REEMPLAZAR-subdominio.ngrok-free.dev",
+  "_nota": "URL del tunel de la API de metadatos. Cambia en cada sesion de ngrok gratuito. Si el tunel esta caido, 03 omite el enriquecimiento y el pipeline continua."
+}
