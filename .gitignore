@@ -38,3 +38,5 @@ mlruns/
 *.key
 kaggle.json
 .backup_paso*/
+=*
+*.whl

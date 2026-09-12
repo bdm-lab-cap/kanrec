@@ -3,7 +3,7 @@ Baseline numerical encoders and the model factory that builds every model
 compared in this thesis (raw normalisation, AutoDis, KAN-REC) around the
 same InteractionMLP backbone and prediction head.
 
-Fix applied (2026-09, auditoría de tribunal — hallazgo A5)
+Correccion aplicada en la revision critica
 --------------------------------------------------------------
 The previous AutoDis implementation applied a sigmoid to the per-bucket
 logits *before* the softmax:
@@ -148,7 +148,7 @@ def build_model(
 ) -> nn.Module:
     """
     Builds the model for a named encoder, all sharing the same
-    InteractionMLP backbone and head via CTRModel (hallazgo B5/B6).
+    InteractionMLP backbone and head via CTRModel (la revision critica).
 
     This is what fixes `experiments/train.py --encoder ...`: previously the
     flag only changed the checkpoint's file name because every branch

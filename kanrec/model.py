@@ -3,7 +3,7 @@ CTRModel: shared architecture for every encoder compared in this thesis
 (raw normalisation, AutoDis, KAN-REC), plus KANRecModel as the concrete
 KAN-REC instantiation.
 
-Single source of truth (auditoría de tribunal — hallazgo B5 y B6)
+Single source of truth (revision critica, semana 6 y B6)
 --------------------------------------------------------------------
 Earlier, `KANRecModel` here used a `KANInteractionLayer` (a second KAN),
 while every training notebook (04, 07, 08, 09) independently redefined
@@ -79,7 +79,7 @@ class CTRModel(nn.Module):
 
         self.numerical_encoder = numerical_encoder
 
-        # NOTE (deferred, hallazgo B9): padding_idx=0 zeroes out whichever
+        # NOTE (limitacion conocida): padding_idx=0 zeroes out whichever
         # category Spark's StringIndexer assigned index 0 to — the *most
         # frequent* category, not a padding token. Affects all encoders
         # equally, so comparisons stay fair; left for a later pass.
@@ -96,7 +96,7 @@ class CTRModel(nn.Module):
         )
 
         # La cabeza devuelve LOGITS, no probabilidades. La Sigmoid se quito
-        # de aqui (hallazgo C3, y causa raiz de un device-side assert en GPU):
+        # de aqui (la revision critica, y causa raiz de un device-side assert en GPU):
         # Sigmoid + BCELoss puede saturar a pred=0.0 o 1.0 exactos en float32,
         # y entonces BCELoss calcula log(0)=-inf, que en CUDA es un assert
         # fatal (en CPU solo daba inf y seguia, por eso no fallaba localmente).
@@ -135,7 +135,7 @@ class KANRecModel(CTRModel):
     at the library default [-1, 1] and does *not* adapt itself. Call
     `model.calibrate(x_num_sample)` once, right after construction and
     before training, on a batch of normalised numerical data — see
-    KANNumericalEncoder.calibrate for why this matters (hallazgo A3).
+    KANNumericalEncoder.calibrate for why this matters (corregido en la revision critica).
     """
 
     def __init__(
@@ -161,7 +161,7 @@ class KANRecModel(CTRModel):
         # Entropy regularisation weight (promotes spline sparsity -> more
         # faithful symbolic extraction). See encoder.entropy_regularization_loss
         # for the fix to the bug that made this always contribute zero
-        # (hallazgo A6).
+        # (corregido en la revision critica).
         #
         # 1e-5, not 1e-3 (verificado empiricamente): at 1e-3 the penalty
         # crushes the spline path. Measured on a synthetic sin(2.5x) signal,

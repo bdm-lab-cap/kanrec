@@ -3,7 +3,7 @@ FaithfulnessEvaluator — measures how well the symbolic formula approximates
 the trained KAN model.
 
 Metrics:
-  - Gap RMSE:            ‖ŷ_KAN − ŷ_symbolic‖ on test set (target < 0.01)
+  - Gap RMSE:            ‖ŷ_KAN − ŷ_symbolic‖ (OBSOLETO, ver nota abajo)
   - Stability:           % seeds recovering the same operator (via MongoDB query)
   - Monotonicity audit:  violation rate per field
 """
@@ -36,7 +36,19 @@ class FaithfulnessEvaluator:
     def compute_gap_rmse(self) -> float:
         """
         Computes ‖ŷ_KAN − ŷ_symbolic‖ on the test set.
-        A gap < 0.01 indicates the formula faithfully represents the model.
+        OBSOLETO. Este metodo suma los phi_j y aplica una sigmoide, ignorando
+        las 26 embeddings categoricas, la capa de interaccion y la cabeza: es
+        un GAM aditivo que no puede aproximar al modelo por construccion, asi
+        que su "gap" mide la distancia a un modelo distinto, no la fidelidad
+        de la formula. El objetivo original de gap < 0.01 partia por tanto de
+        una premisa incorrecta.
+
+        La metrica correcta es la ablacion por sustitucion: reemplazar phi_j
+        por su formula DENTRO del modelo, dejando el resto intacto. Ver
+        `kanrec.ablation.substitution_ablation`, que reporta el error de
+        reproduccion de la curva (0,066 medido) y la degradacion de AUC.
+
+        Se conserva solo por compatibilidad con resultados anteriores.
         """
         kan_preds, sym_preds = [], []
         self.model.eval()

@@ -1,5 +1,5 @@
 """
-Regression tests for the "cimientos de datos" fixes (auditoría de tribunal,
+Regression tests for the "cimientos de datos" fixes (revision critica,
 hallazgos A3, A5, A6, B5, B6).
 
 Each test is written to FAIL against the pre-fix code, so it documents the
@@ -27,7 +27,7 @@ class TestGridCalibration:
 
     def test_calibrate_adapts_grid_to_unnormalised_field(self):
         """
-        This is the exact failure mode from hallazgo A3: an unnormalised
+        This is the exact failure mode from la revision critica: an unnormalised
         field (e.g. Criteo's I6-I13, in the hundreds or thousands) must end
         up with a grid that actually covers its values, or the spline term
         is zero almost everywhere and the encoder degenerates to base_weight * SiLU(x).
@@ -98,7 +98,7 @@ class TestGridCalibration:
 
     def test_without_calibration_gradient_to_spline_is_exactly_zero(self):
         """
-        Documenta el bug original tal cual estaba (hallazgo A3): sin
+        Documenta el bug original tal cual estaba (corregido en la revision critica): sin
         calibrar, un valor fuera de [-1, 1] no llega a ninguna base
         spline, así que el gradiente es EXACTAMENTE 0 — el spline nunca
         podía aprender nada sobre ese campo, por mucho que se entrenara.

@@ -15,7 +15,7 @@ def apply_pipeline_and_unpack(df, pipeline_model, std_cols):
     Applies a fitted MLlib PipelineModel and unpacks StandardScaler's
     vector output back into the original scalar column names.
 
-    Fix applied (auditoría de tribunal — hallazgo A2): StandardScaler
+    Fix applied (revision critica, semana 6): StandardScaler
     writes its output into a *new* vector column (conventionally named
     "num_scaled"). If nothing unpacks it, the original scalar columns
     stay in their raw, unnormalised scale, and any downstream code that
@@ -54,7 +54,7 @@ def random_sample(df, n_rows: int, seed: int, safety_margin: float = 3.0):
     Draws an approximately-`n_rows` random sample preserving the natural
     row order / class distribution of `df`.
 
-    Fix applied (auditoría de tribunal — hallazgo A4): `.limit(n)` is NOT
+    Fix applied (revision critica, semana 6): `.limit(n)` is NOT
     a random sample — it returns the first `n` rows in whatever order the
     underlying files happen to be read, which for a time-ordered dataset
     like Criteo means any two `.limit()` calls at different offsets (e.g.

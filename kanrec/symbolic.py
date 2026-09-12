@@ -7,6 +7,8 @@ Steps:
   2. Fit each surviving curve to an operator from the library
   3. Persist results to MongoDB via MongoSymbolicStore
 """
+from collections import Counter
+
 import numpy as np
 from typing import Callable, Optional
 from scipy.optimize import curve_fit
@@ -74,56 +76,132 @@ class SymbolicExtractor:
 
     # ── Symbolic fitting ──────────────────────────────────────────────────────
 
-    def fit_field(self, field_idx: int, n_grid: int = 500) -> dict:
-        """Fits the best operator from OPERATOR_LIBRARY to curve φⱼ."""
-        x_grid, y_curves = self.model.numerical_encoder.get_spline_curves(
-            field_idx, n_points=n_grid
-        )
-        x_np = x_grid.numpy()
-        y_np = y_curves[:, 0].numpy()
-
-        best = {"operator": None, "r2": -1.0, "params": None,
-                "formula": "?", "accepted": False}
+    def _fit_curve(self, x_np, y_np) -> dict:
+        """Ajusta la libreria de operadores a UNA curva y devuelve el mejor."""
+        best = {"operator": None, "r2": -1.0, "params": None, "formula": "?"}
 
         for name, fn in OPERATOR_LIBRARY.items():
             try:
-                # np.errstate: curve_fit explora deliberadamente valores
-                # extremos del parametro 'a' durante la optimizacion, donde
+                # curve_fit explora valores extremos del parametro 'a', donde
                 # a * exp(x) desborda float64. NumPy devuelve inf/NaN, el
-                # optimizador los descarta y sigue -- el aviso es ruido
-                # informativo, no un error. Acotar el exponente no lo evita:
-                # el desbordamiento viene del PRODUCTO a * exp(x), y 'a' no
-                # esta acotado. Se silencia el aviso y, a cambio, se descarta
-                # explicitamente cualquier ajuste que no sea finito.
+                # optimizador los descarta y sigue: el aviso es ruido, no un
+                # error. Acotar el exponente no lo evita, porque el
+                # desbordamiento viene del producto y 'a' no esta acotado.
+                # Se silencia el aviso y se descarta todo ajuste no finito.
                 with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                     params, _ = curve_fit(fn, x_np, y_np, maxfev=5000)
                     y_pred = fn(x_np, *params)
                 if not np.all(np.isfinite(y_pred)) or not np.all(np.isfinite(params)):
                     continue
-                ss_res = np.sum((y_np - y_pred) ** 2)
-                ss_tot = np.sum((y_np - y_np.mean()) ** 2) + 1e-10
-                r2     = float(1 - ss_res / ss_tot)
+                ss_tot = np.sum((y_np - y_np.mean()) ** 2)
+                if ss_tot < 1e-12:          # curva plana: R2 no definido
+                    continue
+                r2 = float(1 - np.sum((y_np - y_pred) ** 2) / (ss_tot + 1e-10))
                 if r2 > best["r2"]:
                     a, b = round(float(params[0]), 4), round(float(params[1]), 4)
                     best = {
                         "operator": name,
                         "r2":       r2,
-                        "params":   params,
+                        "params":   [float(params[0]), float(params[1])],
                         "formula":  FORMULA_TEMPLATES[name].format(a=a, b=b),
-                        "accepted": r2 >= self.r2_threshold,
                     }
             except Exception:
                 continue
-
         return best
 
-    def _is_monotone(self, field_idx: int) -> bool:
-        """Returns True if φⱼ is >95% monotone (increasing or decreasing)."""
+    def fit_field(self, field_idx: int, n_grid: int = 500) -> dict:
+        """
+        Ajusta la libreria de operadores a las `embedding_dim` dimensiones de
+        phi_j, evaluadas en el rango calibrado del campo.
+
+        Ajustar solo la dimension 0 y reportarlo como si describiera el campo
+        entero asume, sin demostrarlo, que esa proyeccion es representativa.
+        Sobre una senal sinusoidal conocida se comprobo que no lo es: la
+        dimension 0 elegia un operador distinto del dominante entre las 16.
+        Por eso se ajustan todas y se reporta:
+
+          operator            operador dominante (el que gana en mas dimensiones)
+          r2_mean/std/min     dispersion del ajuste entre dimensiones
+          operator_agreement  fraccion de dimensiones que eligen el dominante
+
+        `r2` se mantiene como alias de `r2_mean` por compatibilidad, y
+        `dim0_operator` permite comparar con resultados anteriores al cambio.
+        """
+        x_grid, y_curves = self.model.numerical_encoder.get_spline_curves(
+            field_idx, n_points=n_grid
+        )
+        x_np = x_grid.numpy()
+
+        per_dim = []
+        for d in range(y_curves.shape[1]):
+            fit = self._fit_curve(x_np, y_curves[:, d].numpy())
+            if fit["operator"] is not None:
+                per_dim.append(fit)
+
+        if not per_dim:
+            return {"operator": None, "r2": -1.0, "params": None,
+                    "formula": "?", "accepted": False, "n_dims_fitted": 0}
+
+        ops = [f["operator"] for f in per_dim]
+        dominant, n_dom = Counter(ops).most_common(1)[0]
+        r2s = np.array([f["r2"] for f in per_dim], dtype=float)
+
+        # Formula representativa: el mejor ajuste ENTRE las dimensiones que
+        # eligieron el operador dominante.
+        representative = max((f for f in per_dim if f["operator"] == dominant),
+                             key=lambda f: f["r2"])
+
+        return {
+            "operator":           dominant,
+            "r2":                 float(r2s.mean()),
+            "params":             representative["params"],
+            "formula":            representative["formula"],
+            "accepted":           bool(r2s.mean() >= self.r2_threshold),
+            "n_dims_fitted":      len(per_dim),
+            "operator_agreement": n_dom / len(per_dim),
+            "r2_mean":            float(r2s.mean()),
+            "r2_std":             float(r2s.std()),
+            "r2_min":             float(r2s.min()),
+            "r2_max":             float(r2s.max()),
+            "dim0_operator":      per_dim[0]["operator"],
+            "dim0_r2":            per_dim[0]["r2"],
+        }
+
+    def monotonicity(self, field_idx: int, tol: float = 1e-4) -> dict:
+        """
+        Monotonia observada de phi_j, promediada sobre todas las dimensiones.
+
+        Se reporta la fraccion de tramos que va en la direccion minoritaria:
+        cerca de 0 significa curva monotona. No se compara contra una
+        direccion "esperada" porque las variables de Criteo son anonimas y
+        esa expectativa no puede afirmarse sin inventarla.
+        """
         import torch
-        _, y = self.model.numerical_encoder.get_spline_curves(field_idx)
-        diffs    = torch.diff(y[:, 0])
-        dominant = max((diffs > 0).sum().item(), (diffs < 0).sum().item())
-        return (len(diffs) - dominant) / len(diffs) < 0.05
+
+        _, curves = self.model.numerical_encoder.get_spline_curves(field_idx)
+        rates, directions = [], []
+        for d in range(curves.shape[1]):
+            diffs = torch.diff(curves[:, d])
+            n_up = int((diffs > tol).sum())
+            n_down = int((diffs < -tol).sum())
+            if n_up + n_down == 0:
+                rates.append(0.0)
+                directions.append("flat")
+                continue
+            rates.append(min(n_up, n_down) / len(diffs))
+            directions.append("increasing" if n_up >= n_down else "decreasing")
+
+        rate = float(np.mean(rates))
+        return {
+            "violation_rate": rate,
+            "violation_std":  float(np.std(rates)),
+            "direction":      Counter(directions).most_common(1)[0][0],
+            "is_monotone":    rate < 0.05,
+        }
+
+    def _is_monotone(self, field_idx: int) -> bool:
+        """Compatibilidad: True si phi_j es monotona (violacion < 5 %)."""
+        return self.monotonicity(field_idx)["is_monotone"]
 
     # ── Main pipeline ─────────────────────────────────────────────────────────
 

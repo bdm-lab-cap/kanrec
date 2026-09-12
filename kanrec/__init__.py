@@ -8,7 +8,7 @@ without pulling in torch, scipy or pymongo.
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-__version__ = "0.3.0"
+__version__ = "0.3.2"
 
 _LAZY: dict[str, str] = {
     "KANNumericalEncoder": ".encoder",
@@ -25,6 +25,9 @@ _LAZY: dict[str, str] = {
     "VectorizedKANEncoder": ".vectorized",
     "vectorize_model": ".vectorized",
     "set_seed": ".reproducibility",
+    "coverage_drift": ".drift",
+    "distribution_drift": ".drift",
+    "drift_report": ".drift",
     "SymbolicResult": ".schema",
     "compare_latency": ".latency",
     "MongoSymbolicStore": ".mongo_store",
@@ -44,6 +47,7 @@ if TYPE_CHECKING:  # pragma: no cover - static analysers only
     from .encoder import KANNumericalEncoder
     from .ablation import substitution_ablation
     from .latency import compare_latency, measure_latency
+    from .drift import coverage_drift, distribution_drift, drift_report
     from .reproducibility import set_seed
     from .schema import SymbolicResult
     from .vectorized import VectorizedKANEncoder, vectorize_model

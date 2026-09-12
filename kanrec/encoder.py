@@ -12,7 +12,7 @@ Unlike AutoDis (KDD 2021), this encoder:
     on `monotone_fields` below)
   - Produces directly plottable curves (see get_spline_curves)
 
-Fix applied (2026-09, auditoría de tribunal — hallazgo A3)
+Correccion aplicada en la revision critica
 ------------------------------------------------------------
 efficient-kan's B-spline grid defaults to ``[-1, 1]``. Outside that range
 every basis function is exactly zero, so the spline term of the encoder
@@ -94,8 +94,7 @@ class KANNumericalEncoder(nn.Module):
         Returns:
             embeddings: [batch, num_fields, embedding_dim]
         """
-        # Winsorizado de la entrada (hallazgo verificado en la corrida real de
-        # Colab): tras StandardScaler, Criteo conserva outliers de hasta ~690
+        # Winsorizado de la entrada (verificado empiricamente): tras StandardScaler, Criteo conserva outliers de hasta ~690
         # desviaciones tipicas en I6/I12. La ruta base del KAN es
         # base_weight * SiLU(x), y SiLU(690) ~= 690, asi que un solo outlier
         # arrastra el embedding a magnitud ~1e2-1e3. Con grid_size>=10 eso

@@ -4,8 +4,8 @@ Encoder KAN vectorizado.
 Motivación (medición, no intuición)
 -----------------------------------
 El perfilado de latencia sobre GPU T4 mostró que el encoder numérico consume
-el **81,7%** del tiempo de inferencia del modelo completo, y que KAN-REC era
-4,3x más lento que la normalización directa (11,08 ms frente a 2,58 ms por
+el **84,5 %** del tiempo de inferencia del modelo completo, y que KAN-REC era
+4,05 veces más lento que la normalización directa (10,45 ms frente a 2,58 ms por
 batch de 4096).
 
 La causa no es que evaluar B-splines sea caro en sí, sino que

@@ -21,7 +21,7 @@
 # puede haber quedado instalado en el entorno pip aislado de la sesion
 # anterior y un simple re-run de la celda no lo revierte.
 #
-# Fix applied (2026-09, auditoria de tribunal - hallazgo A2)
+# Correccion aplicada en la revision critica
 # --------------------------------------------------------------
 # StandardScaler used to write its output into a NEW vector column
 # ("num_scaled") that no downstream notebook ever read: every training
@@ -34,6 +34,29 @@
 # and stddev ~1.0 in the printed summary. Keep that output for the
 # memoria's Anexo D (evidence that the pipeline does what it claims).
 
+# ---------------------------------------------------------------------------
+# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
+#
+# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
+# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
+#   MagicUsageError: %pip magic command is disabled
+#
+# Por eso la primera celda de cada notebook NO instala nada. El paquete se
+# resuelve por una de estas dos vias, ambas compatibles con pipeline:
+#
+#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
+#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
+#
+#          import sys
+#          sys.path.insert(0, "/lakehouse/default/Files/libs")
+#
+#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
+#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
+#      Publicar -> asignar el entorno al workspace o al notebook.
+#
+# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
+# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
+# ---------------------------------------------------------------------------
 import json, os
 import numpy as np
 from pyspark.sql import functions as F
@@ -99,7 +122,7 @@ raw = (spark.read
        .schema(schema)
        .csv("Files/raw/criteo_10m.tsv"))
 
-# NOTA (deferred, hallazgo B9): los nulos se imputan a 0.0 sin una mascara
+# NOTA (limitacion conocida): los nulos se imputan a 0.0 sin una mascara
 # de "is_null" separada, así que "ausente" y "vale cero" quedan fusionados.
 # En Criteo el patron de ausencia es predictivo por si mismo; anadir 13
 # columnas binarias I{j}_is_null es la mejora natural del siguiente pase,
@@ -275,7 +298,7 @@ written.select(STD_COLS).describe().show()
 
 # Asercion dura: si I6..I13 NO estan normalizadas en la tabla escrita, parar
 # aqui con un error claro en vez de dejar que 04/05 entrenen sobre datos
-# crudos y produzcan curvas espuriamente lineales (hallazgo A2).
+# crudos y produzcan curvas espuriamente lineales (corregido en la revision critica).
 from pyspark.sql import functions as F
 stats = written.select(
     *[F.stddev(c).alias(f"std_{c}") for c in STD_COLS]

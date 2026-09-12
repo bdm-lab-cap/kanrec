@@ -60,6 +60,29 @@
 # NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
 # los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
+# ---------------------------------------------------------------------------
+# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
+#
+# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
+# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
+#   MagicUsageError: %pip magic command is disabled
+#
+# Por eso la primera celda de cada notebook NO instala nada. El paquete se
+# resuelve por una de estas dos vias, ambas compatibles con pipeline:
+#
+#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
+#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
+#
+#          import sys
+#          sys.path.insert(0, "/lakehouse/default/Files/libs")
+#
+#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
+#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
+#      Publicar -> asignar el entorno al workspace o al notebook.
+#
+# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
+# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
+# ---------------------------------------------------------------------------
 import json
 import os
 import time

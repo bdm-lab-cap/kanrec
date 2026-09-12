@@ -12,8 +12,7 @@
 # para el detalle completo del fallo). kanrec>=0.3.2 ya no lo hace. Si tras
 # actualizar sigue fallando, reinicia el kernel de PySpark.
 #
-# Fix applied (2026-09, auditoria de tribunal - hallazgo A2, consistencia
-# batch/stream)
+# Correccion aplicada en la revision critica
 # --------------------------------------------------------------------------
 # This notebook called `pipeline_model.transform(flat)` directly and then
 # selected NUMERICAL_COLS by name. That gave the same bug as 01 before its

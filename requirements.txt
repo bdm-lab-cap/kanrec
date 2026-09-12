@@ -2,8 +2,9 @@
 torch==2.2.2
 torchvision==0.17.2
 torchaudio==2.2.2
-# efficient-kan: install from GitHub
-# pip install git+https://github.com/Blealtan/efficient-kan.git@7b6ce1c --no-deps
+# efficient-kan NO se instala: esta vendorizado en kanrec/vendor/efficient_kan.py
+# con su licencia MIT, porque el paquete no se publica en PyPI y su ausencia
+# hacia fallar la instalacion a cualquiera que clonase el repositorio.
 numpy==1.26.4
 scipy>=1.12.0
 scikit-learn>=1.4.0

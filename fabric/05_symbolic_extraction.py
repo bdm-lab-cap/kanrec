@@ -5,7 +5,7 @@
 # Requiere el paquete kanrec instalado en esta sesion:
 #   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
 #
-# Fixes aplicados (auditoria de tribunal):
+# Fixes aplicados (revision critica):
 #
 #   B5 — Este notebook redefinia KANNumericalEncoder/KANRecModel de forma
 #        LOCAL, con una arquitectura de interaccion distinta a la que de
@@ -24,13 +24,36 @@
 #        get_spline_curves (ya corregido en el paquete) evalua sobre esa
 #        misma calibracion, no sobre una ventana arbitraria.
 #
-#   (pendiente, fuera del alcance de este paso — hallazgo A7): la formula
+#   (pendiente, fuera del alcance de este paso — la revision critica): la formula
 #   ajustada aqui describe UNA de las `embedding_dim` dimensiones del
 #   embedding del campo, no la funcion de scoring completa. Este notebook
 #   sigue documentando eso mismo mas abajo; la metrica de fidelidad
 #   (sustituir phi_j dentro del modelo y medir la caida de AUC) es tarea
 #   del siguiente paso (interpretabilidad), no de este.
 
+# ---------------------------------------------------------------------------
+# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
+#
+# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
+# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
+#   MagicUsageError: %pip magic command is disabled
+#
+# Por eso la primera celda de cada notebook NO instala nada. El paquete se
+# resuelve por una de estas dos vias, ambas compatibles con pipeline:
+#
+#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
+#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
+#
+#          import sys
+#          sys.path.insert(0, "/lakehouse/default/Files/libs")
+#
+#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
+#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
+#      Publicar -> asignar el entorno al workspace o al notebook.
+#
+# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
+# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
+# ---------------------------------------------------------------------------
 import json, os
 import numpy as np
 import torch
@@ -58,7 +81,7 @@ OPERATOR_LIBRARY = {
     "log":     lambda x, a, b: a * np.log(np.abs(x) + 1) + b,
     # Mismo clip que kanrec/symbolic.py (+-500), no +-10: un clip agresivo a
     # +-10 truncaba la curva DENTRO del rango de datos reales. Ambos ficheros
-    # deben usar la MISMA libreria de operadores (hallazgo C9).
+    # deben usar la MISMA libreria de operadores (corregido en la revision critica).
     "exp":     lambda x, a, b: a * np.exp(np.clip(x, -500, 500)) + b,
     "square":  lambda x, a, b: a * x ** 2 + b,
     "sqrt":    lambda x, a, b: a * np.sqrt(np.abs(x)) + b,
@@ -118,7 +141,7 @@ def fit_field(model: KANRecModel, field_idx: int, r2_threshold: float = 0.90) ->
         operador dominante.
     Se conserva `dim0_*` para poder comparar con los resultados anteriores.
 
-    NOTA (hallazgo A7): esto describe phi_j, la funcion de CODIFICACION del
+    NOTA (corregido en la revision critica): esto describe phi_j, la funcion de CODIFICACION del
     campo, no la funcion de scoring completa (que ademas pasa por las 26
     categoricas, la interaccion y la cabeza). Ese alcance debe quedar
     explicito en la memoria.
@@ -241,7 +264,7 @@ for seed, ckpt in checkpoints:
 
     norms = model.numerical_encoder.get_edge_norms()
     surviving = [j for j, n in enumerate(norms) if n >= np.percentile(norms, 20)]
-    # ATENCION al interpretar esto (hallazgo B2): el percentil 20 descarta
+    # ATENCION al interpretar esto (corregido en la revision critica): el percentil 20 descarta
     # ~20% de los campos POR CONSTRUCCION, tengan o no importancia real.
     # No es una medida de importancia: es un criterio de conveniencia para
     # acotar cuantas formulas hay que inspeccionar. En la memoria debe
@@ -314,7 +337,7 @@ with open("/lakehouse/default/Files/results/symbolic_results.json", "w") as f:
     }, f, indent=2)
 print("\nsymbolic_results.json saved to Files/results/")
 print(
-    "\nRECORDATORIO para la memoria (hallazgo A7): la formula describe phi_j, "
+    "\nRECORDATORIO para la memoria (corregido en la revision critica): la formula describe phi_j, "
     "la funcion de CODIFICACION del campo (ajustada sobre las 16 dimensiones "
     "de su embedding), NO la funcion de scoring completa: el scoring pasa "
     "ademas por las 26 categoricas, la capa de interaccion y la cabeza. "
