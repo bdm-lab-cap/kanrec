@@ -1,0 +1,186 @@
+{
+  "name": "kanrec_end_to_end",
+  "objectId": "kanrec-pipeline",
+  "properties": {
+    "description": "DOCUMENTACION DE REFERENCIA de la estructura del pipeline. La capacidad de prueba de Fabric no permite importar este JSON: el pipeline se construye en el lienzo siguiendo PIPELINE_README.md, y los identificadores de notebook y workspace se resuelven al seleccionarlos alli. Los valores REEMPLAZAR_* documentan que campos rellena Fabric automaticamente. AVISO: el grafo aqui descrito es el PARALELO (tres ramas tras la ingesta), coherente con las dependencias reales de datos. En la capacidad de prueba se ejecuta SERIALIZADO porque no hay cola de trabajos y la concurrencia se rechaza con HTTP 430. Ver 7.4 de la memoria.",
+    "activities": [
+      {
+        "name": "01_Ingesta_Spark",
+        "description": "Lee criteo_10m.tsv, normaliza (log1p + StandardScaler), indexa las categóricas y escribe train/val/test + cat_index_maps + scaler_stats.json. Es la raíz del grafo: todo lo demás depende de sus tablas.",
+        "type": "TridentNotebook",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "0.02:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 60,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_01",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE",
+          "parameters": {
+            "raw_path": {
+              "value": "Files/raw/criteo_10m.tsv",
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "03_Enriquecimiento_API",
+        "description": "Ingesta de metadatos desde la API REST y unión con la tabla train. Depende de 01 porque hace join contra train.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "01_Ingesta_Spark",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:30:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_03",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
+        }
+      },
+      {
+        "name": "04_Comparativa_Modelos",
+        "description": "Entrena raw, AutoDis y KAN-REC sobre las tablas normalizadas y escribe experiment_results. Verifica al inicio que I6..I13 estén normalizadas y aborta si no.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "01_Ingesta_Spark",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.03:00:00",
+          "retry": 0
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_04_TRIAL",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE",
+          "parameters": {
+            "n_train": {
+              "value": "40000",
+              "type": "int"
+            },
+            "seeds": {
+              "value": "[42]",
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "name": "05_Extraccion_Simbolica",
+        "description": "Poda, ajuste simbólico sobre las 16 dimensiones, fidelidad por sustitución y auditoría de monotonía. Escribe symbolic_results, spline_curves y baseline_metrics para Power BI.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "04_Comparativa_Modelos",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.01:00:00",
+          "retry": 1,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_05",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
+        }
+      },
+      {
+        "name": "06_Procesamiento_Streaming",
+        "description": "Aplica al stream los MISMOS estadísticos del batch (scaler_stats.json y cat_index_maps de 01), garantizando consistencia entre entrenamiento y servicio. Depende de 01 por eso, no por los datos del stream.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "01_Ingesta_Spark",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:45:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_06",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
+        }
+      },
+      {
+        "name": "09_MongoDB_Persistencia",
+        "description": "Persiste los resultados simbólicos y los embeddings en MongoDB Atlas con el esquema único de kanrec.schema.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "05_Extraccion_Simbolica",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:30:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 30
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_09",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
+        }
+      },
+      {
+        "name": "Notificar_Fallo",
+        "description": "Se activa si cualquier etapa crítica falla. Permite enterarse del fallo sin revisar el historial a mano.",
+        "type": "Office365Outlook",
+        "dependsOn": [
+          {
+            "activity": "01_Ingesta_Spark",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          },
+          {
+            "activity": "04_Comparativa_Modelos",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          },
+          {
+            "activity": "05_Extraccion_Simbolica",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "subject": "[KAN-REC] Fallo en el pipeline",
+          "body": "Una etapa del pipeline kanrec_end_to_end ha fallado. Revisa el historial de ejecución en el workspace."
+        }
+      }
+    ],
+    "annotations": [
+      "kanrec",
+      "tfm"
+    ],
+    "lastModifiedByObjectId": "",
+    "lastPublishTime": ""
+  }
+}

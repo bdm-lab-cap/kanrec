@@ -28,7 +28,31 @@
 # just "the same Pipeline object" — that part was already true and was
 # never the bug).
 
+# ---------------------------------------------------------------------------
+# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
+#
+# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
+# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
+#   MagicUsageError: %pip magic command is disabled
+#
+# Por eso la primera celda de cada notebook NO instala nada. El paquete se
+# resuelve por una de estas dos vias, ambas compatibles con pipeline:
+#
+#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
+#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
+#
+#          import sys
+#          sys.path.insert(0, "/lakehouse/default/Files/libs")
+#
+#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
+#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
+#      Publicar -> asignar el entorno al workspace o al notebook.
+#
+# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
+# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
+# ---------------------------------------------------------------------------
 import json
+import os
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col
 import pandas as pd
@@ -44,7 +68,29 @@ STD_COLS = [f"I{i}" for i in range(6, 14)]
 # guardo scaler_stats.json y la tabla cat_index_maps, que 06 reutiliza aqui
 # para aplicar EXACTAMENTE la misma transformacion al stream que al batch.
 print("Loading scaler stats and categorical index maps from 01...")
-with open("/lakehouse/default/Files/config/scaler_stats.json") as f:
+
+# Guarda de dependencias: si faltan los artefactos de 01, el error debe
+# decir QUE falta y COMO generarlo. Sin esto el fallo aparece como un rastro
+# de Java sobre una ruta inexistente, que es lo que ocurria cuando este
+# notebook aun cargaba el PipelineModel de MLlib ya retirado.
+_faltan = []
+_stats_path = "/lakehouse/default/Files/config/scaler_stats.json"
+if not os.path.exists(_stats_path):
+    _faltan.append(f"{_stats_path} (lo escribe 01)")
+try:
+    spark.read.table("cat_index_maps").limit(1).count()
+except Exception:
+    _faltan.append("tabla cat_index_maps (la escribe 01)")
+if _faltan:
+    raise FileNotFoundError(
+        "Faltan artefactos de normalizacion:\n  - " + "\n  - ".join(_faltan) +
+        "\n\nEjecuta 01_spark_ingest_mlllib antes de este notebook. Si ya lo "
+        "ejecutaste, comprueba que es la version actual: las versiones "
+        "anteriores guardaban un PipelineModel de MLlib en "
+        "Files/models/mlllib_pipeline, que ya no se usa."
+    )
+
+with open(_stats_path) as f:
     scaler_stats = json.load(f)
 index_maps_df = spark.read.table("cat_index_maps")  # columnas: column, value, idx
 
