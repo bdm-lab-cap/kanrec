@@ -70,6 +70,10 @@ jobs:
     name: Build wheel
     runs-on: ubuntu-latest
     needs: test
+    # Necesario para que softprops/action-gh-release pueda crear la Release:
+    # el GITHUB_TOKEN es de solo lectura por defecto.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
