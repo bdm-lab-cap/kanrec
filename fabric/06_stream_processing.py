@@ -1,147 +1,229 @@
 # Microsoft Fabric Notebook — 06_stream_processing
-# Processes streaming_kfk with the pre-fitted MLlib Pipeline from 01.
-# Consume la tabla 'streaming_kfk' que alimenta Eventstream desde Confluent
-# Cloud. Requiere que el Eventstream este activo y haya recibido eventos.
-# Attach kanrec_lakehouse before running.
 #
-# Requires the kanrec package installed in this session:
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# Procesa de forma INCREMENTAL la tabla `streaming_kfk` que alimenta
+# Eventstream desde Confluent Cloud, la normaliza EXACTAMENTE como el batch,
+# la PUNTÚA con el modelo KAN-REC entrenado en 04 y vigila la DERIVA de las
+# entradas respecto a train. Attach kanrec_lakehouse before running.
 #
-# IMPORTANTE: kanrec<0.3.2 arrastraba mlflow como dependencia obligatoria,
-# lo que rompia el mlflow propio de Fabric (ver 01_spark_ingest_mlllib.py
-# para el detalle completo del fallo). kanrec>=0.3.2 ya no lo hace. Si tras
-# actualizar sigue fallando, reinicia el kernel de PySpark.
+# Qué cambia respecto a la versión anterior
+# -----------------------------------------
+# 1. Incremental, no full-refresh. Antes: `spark.read.table` + `overwrite`,
+#    es decir, reprocesar todo el histórico del stream en cada ejecución.
+#    Ahora: Structured Streaming sobre la tabla Delta con
+#    `trigger(availableNow=True)`: procesa sólo lo llegado desde la última
+#    ejecución, con checkpoint de offsets, y termina. Es la semántica que un
+#    consumidor de eventos debe tener y además encaja en el pipeline de
+#    Data Factory (trabajo con principio y fin) sin dejar un job vivo.
 #
-# Correccion aplicada en la revision critica
-# --------------------------------------------------------------------------
-# This notebook called `pipeline_model.transform(flat)` directly and then
-# selected NUMERICAL_COLS by name. That gave the same bug as 01 before its
-# fix: StandardScaler's output lives in a separate vector column
-# ("num_scaled") that was never unpacked, so I6..I13 in
-# Tables/streaming_processed were still in their raw scale — exactly the
-# "Pipeline serialised guarantees consistency between batch and stream"
-# claim the memoria makes, except it wasn't true for the stream side.
+# 2. Una sola función de normalización. Antes 01 y 06 llevaban dos copias
+#    del mismo código. Ahora ambos llaman a
+#    `kanrec.spark_utils.normalise_like_train` con los mismos
+#    `scaler_stats.json` y `cat_index_maps` que 01 persiste. La consistencia
+#    batch/stream pasa de ser una convención a ser una función.
 #
-# Now both notebooks call the same kanrec.spark_utils.apply_pipeline_and_unpack
-# helper, so batch and stream are provably consistent (same function, not
-# just "the same Pipeline object" — that part was already true and was
-# never the bug).
-
+# 3. El modelo se sirve. Antes el stream se normalizaba y se agregaba el CTR
+#    observado; ningún checkpoint puntuaba una impresión. Ahora cada
+#    micro-batch se puntúa con el checkpoint KAN-REC vectorizado
+#    (`kanrec.serving.score_spark`) y se escriben P(click) por impresión,
+#    métricas por lote (CTR observado vs predicho, log-loss, AUC) y el
+#    manifiesto del modelo usado, verificado contra `scaler_stats.json`
+#    (`check_manifest`): no se puede servir con estadísticos distintos de
+#    los del entrenamiento sin que el notebook aborte.
+#
+# 4. Deriva. Por lote y por campo: PSI frente a train y cobertura del rango
+#    calibrado del encoder (`kanrec.drift`). Se escriben a `streaming_drift`
+#    para el panel y para las reglas de Data Activator.
+#
+# Dependencias (las escribe 01 / 04):
+#   Files/config/scaler_stats.json           (01)
+#   Tables/cat_index_maps                    (01)
+#   Files/config/feature_selection.json      (01)
+#   Files/checkpoints/best_kan-bspline_gs10_s42.pt             (04)
+#   Files/checkpoints/best_kan-bspline_gs10_s42.pt.manifest.json (04, celda final)
+#   Files/config/drift_reference.json        (se crea aquí la primera vez, sobre train)
+#
 # ---------------------------------------------------------------------------
-# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
-#
-# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
-# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
-#   MagicUsageError: %pip magic command is disabled
-#
-# Por eso la primera celda de cada notebook NO instala nada. El paquete se
-# resuelve por una de estas dos vias, ambas compatibles con pipeline:
-#
-#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
-#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
-#
-#          import sys
-#          sys.path.insert(0, "/lakehouse/default/Files/libs")
-#
-#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
-#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
-#      Publicar -> asignar el entorno al workspace o al notebook.
-#
-# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
-# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
+# IMPORTANTE — instalación de kanrec en ejecución por PIPELINE
+# `%pip install` está deshabilitado en ejecución desde un Data Pipeline. El
+# paquete debe estar en el entorno de Fabric asignado al notebook (wheel
+# publicada por CI, ver .github/workflows/ci.yml) o en Files/libs (sys.path).
+# `score_spark` usa mapInPandas: kanrec tiene que estar en los EJECUTORES,
+# es decir, en el entorno, no sólo en el driver.
 # ---------------------------------------------------------------------------
 import json
 import os
+import time
+from datetime import datetime, timezone
+
+import numpy as np
+import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.functions import col
-import pandas as pd
 
-NUMERICAL_COLS   = [f"I{i}" for i in range(1, 14)]
-CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
-LOG_COLS = [f"I{i}" for i in range(1, 6)]
-STD_COLS = [f"I{i}" for i in range(6, 14)]
+from kanrec.drift import DriftReference, calibrated_ranges, drift_report, summarize
+from kanrec.serving import check_manifest, load_model, score_spark
+from kanrec.spark_utils import (
+    CATEGORICAL_COLS_DEFAULT, LOG_COLS_DEFAULT, STD_COLS_DEFAULT,
+    load_index_maps, normalise_like_train,
+)
 
-# Cargar los estadisticos del scaler y los mapas de indices que ESCRIBIO 01.
-# 01 dejo de usar el PipelineModel de MLlib (su StringIndexer abortaba con
-# valores categoricos que parecen registros CSV malformados). En su lugar
-# guardo scaler_stats.json y la tabla cat_index_maps, que 06 reutiliza aqui
-# para aplicar EXACTAMENTE la misma transformacion al stream que al batch.
-print("Loading scaler stats and categorical index maps from 01...")
+NUMERICAL_COLS   = LOG_COLS_DEFAULT + STD_COLS_DEFAULT          # I1..I13
+CATEGORICAL_COLS = CATEGORICAL_COLS_DEFAULT                     # C1..C26
+IDX_COLS         = [f"{c}_idx" for c in CATEGORICAL_COLS]
 
-# Guarda de dependencias: si faltan los artefactos de 01, el error debe
-# decir QUE falta y COMO generarlo. Sin esto el fallo aparece como un rastro
-# de Java sobre una ruta inexistente, que es lo que ocurria cuando este
-# notebook aun cargaba el PipelineModel de MLlib ya retirado.
+FILES            = "/lakehouse/default/Files"
+STATS_PATH       = f"{FILES}/config/scaler_stats.json"
+SELECTION_PATH   = f"{FILES}/config/feature_selection.json"
+DRIFT_REF_PATH   = f"{FILES}/config/drift_reference.json"
+CKPT_PATH        = f"{FILES}/checkpoints/best_kan-bspline_gs10_s42.pt"
+STREAM_CKPT      = "Files/stream_checkpoints/06_stream_processing"   # offsets de Structured Streaming
+
+# ── Guarda de dependencias: qué falta y quién lo genera ─────────────────────
 _faltan = []
-_stats_path = "/lakehouse/default/Files/config/scaler_stats.json"
-if not os.path.exists(_stats_path):
-    _faltan.append(f"{_stats_path} (lo escribe 01)")
+for _p, _who in [(STATS_PATH, "01"), (SELECTION_PATH, "01"), (CKPT_PATH, "04"),
+                 (f"{CKPT_PATH}.manifest.json", "04 (celda final: write_manifest)")]:
+    if not os.path.exists(_p):
+        _faltan.append(f"{_p} (lo escribe {_who})")
 try:
     spark.read.table("cat_index_maps").limit(1).count()
 except Exception:
     _faltan.append("tabla cat_index_maps (la escribe 01)")
 if _faltan:
-    raise FileNotFoundError(
-        "Faltan artefactos de normalizacion:\n  - " + "\n  - ".join(_faltan) +
-        "\n\nEjecuta 01_spark_ingest_mlllib antes de este notebook. Si ya lo "
-        "ejecutaste, comprueba que es la version actual: las versiones "
-        "anteriores guardaban un PipelineModel de MLlib en "
-        "Files/models/mlllib_pipeline, que ya no se usa."
+    raise FileNotFoundError("Faltan artefactos:\n  - " + "\n  - ".join(_faltan))
+
+# ── Consistencia batch/stream verificada, no supuesta ───────────────────────
+with open(STATS_PATH) as f:
+    scaler_stats = json.load(f)
+with open(SELECTION_PATH) as f:
+    _sel = json.load(f)
+if _sel["selected"] != NUMERICAL_COLS:
+    raise RuntimeError(f"feature_selection.json dice {_sel['selected']}, el stream usa {NUMERICAL_COLS}")
+
+manifest = check_manifest(CKPT_PATH, scaler_stats_path=STATS_PATH, numerical_cols=NUMERICAL_COLS)
+MODEL_TAG = f"{manifest['checkpoint']}@{manifest['checkpoint_sha256'][:12]}"
+print(f"Modelo verificado: {MODEL_TAG} | kanrec {manifest['kanrec_version']} | "
+      f"git {manifest.get('git_sha') or '?'} | encoder {manifest['encoder']} "
+      f"grid={manifest.get('grid_size')} d={manifest['embedding_dim']}")
+
+index_maps = load_index_maps(spark, CATEGORICAL_COLS)
+
+# ── Rangos calibrados del encoder (para la cobertura) ───────────────────────
+_model_driver = load_model(CKPT_PATH, device="cpu")
+CAL_RANGES = calibrated_ranges(_model_driver.numerical_encoder)
+del _model_driver
+print("Rango calibrado por campo:",
+      {c: (round(lo, 2), round(hi, 2)) for c, (lo, hi) in zip(NUMERICAL_COLS, CAL_RANGES)})
+
+# ── Referencia de deriva: bins de cuantiles sobre TRAIN, una sola vez ───────
+if os.path.exists(DRIFT_REF_PATH):
+    drift_ref = DriftReference.load(DRIFT_REF_PATH)
+    print(f"Referencia de deriva cargada ({drift_ref.n_ref:,} filas de train).")
+else:
+    print("Construyendo referencia de deriva sobre train (muestra de 500k filas)...")
+    _x_ref = (spark.read.table("train").select(NUMERICAL_COLS)
+              .sample(fraction=0.07, seed=42).limit(500_000).toPandas()
+              .to_numpy(dtype="float64"))
+    drift_ref = DriftReference.fit(_x_ref, NUMERICAL_COLS, n_bins=10, calibrated_ranges=CAL_RANGES)
+    os.makedirs(os.path.dirname(DRIFT_REF_PATH), exist_ok=True)
+    drift_ref.save(DRIFT_REF_PATH)
+    print(f"Referencia guardada en {DRIFT_REF_PATH}.")
+
+# ── Procesamiento de cada micro-batch ───────────────────────────────────────
+def _logloss(y, p, eps=1e-7):
+    p = np.clip(p, eps, 1 - eps)
+    return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
+
+def _auc(y, p):
+    from sklearn.metrics import roc_auc_score
+    return float(roc_auc_score(y, p)) if len(np.unique(y)) == 2 else float("nan")
+
+def process_batch(raw_batch, batch_id: int):
+    t0 = time.time()
+    n_in = raw_batch.count()
+    if n_in == 0:
+        print(f"[batch {batch_id}] vacío, nada que hacer")
+        return
+
+    flat = raw_batch.select(
+        col("timestamp"), col("label").cast("integer"),
+        *[col(f"numerical.{c}").alias(c) for c in NUMERICAL_COLS],
+        *[col(f"categorical.{c}").alias(c) for c in CATEGORICAL_COLS],
     )
 
-with open(_stats_path) as f:
-    scaler_stats = json.load(f)
-index_maps_df = spark.read.table("cat_index_maps")  # columnas: column, value, idx
+    # 1. MISMA transformación que 01 (misma función, mismos artefactos)
+    processed = normalise_like_train(flat, scaler_stats, index_maps,
+                                     numerical_cols=NUMERICAL_COLS,
+                                     log_cols=LOG_COLS_DEFAULT, std_cols=STD_COLS_DEFAULT,
+                                     categorical_cols=CATEGORICAL_COLS)
+    processed = processed.select("timestamp", "label", *NUMERICAL_COLS, *IDX_COLS)
 
-print("Reading streaming_kfk...")
-raw = spark.read.table("streaming_kfk")
-print(f"Rows: {raw.count():,}")
+    # 2. Scoring online con el checkpoint verificado
+    scored = (score_spark(processed, CKPT_PATH, NUMERICAL_COLS, IDX_COLS, output_col="p_click")
+              .withColumn("batch_id", F.lit(batch_id))
+              .withColumn("model", F.lit(MODEL_TAG))
+              .withColumn("scored_at", F.current_timestamp()))
+    scored.persist()
 
-flat = raw.select(
-    col("timestamp"), col("label").cast("integer"),
-    *[col(f"numerical.{c}").alias(c) for c in NUMERICAL_COLS],
-    *[col(f"categorical.{c}").alias(c) for c in CATEGORICAL_COLS],
-)
+    (scored.select("timestamp", "label", "p_click", "batch_id", "model", "scored_at")
+           .write.format("delta").mode("append").saveAsTable("streaming_predictions"))
+    (scored.select("timestamp", "label", *NUMERICAL_COLS, *IDX_COLS, "batch_id")
+           .write.format("delta").mode("append").option("mergeSchema", "true")
+           .saveAsTable("streaming_processed"))   # mergeSchema: la tabla anterior no tenía batch_id
 
-for c in NUMERICAL_COLS:
-    flat = flat.withColumn(c, F.when(F.col(c).isNull(), 0.0).otherwise(F.abs(F.col(c))))
-for c in LOG_COLS:
-    flat = flat.withColumn(c, F.log1p(F.greatest(F.col(c), F.lit(0.0))))
+    # 3. Métricas del lote: observado vs predicho
+    pdf = scored.select("label", "p_click", *NUMERICAL_COLS).toPandas()
+    y, p = pdf["label"].to_numpy(dtype=float), pdf["p_click"].to_numpy(dtype=float)
+    metrics = {
+        "timestamp": datetime.now(timezone.utc).isoformat(), "batch_id": batch_id,
+        "impressions": int(len(y)), "clicks": int(y.sum()),
+        "ctr_observed": float(y.mean()), "ctr_predicted": float(p.mean()),
+        "logloss": _logloss(y, p), "auc": _auc(y, p),
+        "model": MODEL_TAG, "source": "confluent-kafka",
+    }
 
-# StandardScaler nativo con los stats de TRAIN (misma media/desviacion que el batch)
-for c in STD_COLS:
-    m, s = scaler_stats[c]["mean"], scaler_stats[c]["std"]
-    flat = flat.withColumn(c, (F.col(c) - F.lit(m)) / F.lit(s if s else 1.0))
+    # 4. Deriva por campo frente a train
+    report = drift_report(pdf[NUMERICAL_COLS].to_numpy(dtype="float64"), drift_ref)
+    for r in report:
+        r.update({"batch_id": batch_id, "timestamp": metrics["timestamp"], "model": MODEL_TAG})
+    spark.createDataFrame(pd.DataFrame(report)).write.format("delta").mode("append") \
+         .saveAsTable("streaming_drift")
 
-# Indexado categorico con los mapas de TRAIN (join broadcast, no-vistas -> n_cats)
-for c in CATEGORICAL_COLS:
-    mp = (index_maps_df.filter(F.col("column") == c)
-          .select(F.col("value").alias(c), F.col("idx").alias(f"{c}_idx")))
-    n_cats = mp.count()
-    flat = (flat.join(F.broadcast(mp), on=c, how="left")
-                .withColumn(f"{c}_idx", F.coalesce(F.col(f"{c}_idx"), F.lit(n_cats)).cast("int")))
+    s = summarize(report)
+    metrics.update({"max_psi": s["max_psi"], "worst_psi_field": s["worst_psi_field"],
+                    "min_coverage": s["min_coverage"],
+                    "n_fields_psi_alert": len(s["fields_psi_alert"]),
+                    "n_fields_coverage_alert": len(s["fields_coverage_alert"]),
+                    "processing_seconds": round(time.time() - t0, 2)})
+    spark.createDataFrame(pd.DataFrame([metrics])).write.format("delta").mode("append") \
+         .option("mergeSchema", "true").saveAsTable("streaming_metrics")   # columnas nuevas vs. versión anterior
+    scored.unpersist()
 
-processed = flat
-output_cols = (
-    ["timestamp", "label"] + NUMERICAL_COLS
-    + [f"C{i}_idx" for i in range(1, 27) if f"C{i}_idx" in processed.columns]
-)
-stream_processed = processed.select(output_cols)
-stream_processed.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("streaming_processed")
+    print(f"[batch {batch_id}] {len(y):,} impresiones | CTR obs {metrics['ctr_observed']:.4f} "
+          f"vs pred {metrics['ctr_predicted']:.4f} | logloss {metrics['logloss']:.4f} "
+          f"| AUC {metrics['auc']:.4f} | PSI máx {s['max_psi']:.3f} ({s['worst_psi_field']}) "
+          f"| cobertura mín {s['min_coverage']:.4f} | {metrics['processing_seconds']}s")
+    if s["fields_psi_alert"] or s["fields_coverage_alert"]:
+        print(f"   ⚠ deriva: PSI {s['fields_psi_alert']} · cobertura {s['fields_coverage_alert']}")
 
-# ── Verificacion (guardar para el Anexo D) ─────────────────────────────────
-print("\nVerificacion — I6..I13 en el stream (esperado: mean~0, stddev~1, igual que en 01):")
-stream_processed.select(STD_COLS).describe().show()
+# ── Structured Streaming incremental: sólo lo nuevo desde la última ejecución ─
+# `availableNow`: consume todo lo disponible hasta ahora y termina; los
+# offsets quedan en STREAM_CKPT, así que la siguiente ejecución del pipeline
+# empieza donde acabó esta. Para reprocesar desde cero, borrar STREAM_CKPT.
+query = (spark.readStream.format("delta").table("streaming_kfk")
+         .writeStream
+         .foreachBatch(process_batch)
+         .option("checkpointLocation", STREAM_CKPT)
+         .trigger(availableNow=True)
+         .start())
+query.awaitTermination()
+print("\n✓ 06 completado. Tablas actualizadas: streaming_processed, streaming_predictions, "
+      "streaming_metrics, streaming_drift")
 
-# Metrics
-ctr = stream_processed.agg(F.avg("label").alias("ctr")).collect()[0]["ctr"]
-clicks = stream_processed.filter(F.col("label") == 1).count()
-total  = stream_processed.count()
-
-from datetime import datetime
-metrics = [{"timestamp": datetime.now().isoformat(), "impressions": total,
-            "clicks": clicks, "ctr": float(ctr), "source": "confluent-kafka"}]
-spark.createDataFrame(pd.DataFrame(metrics)).write.format("delta").mode("append").save("Tables/streaming_metrics")
-
-print(f"\n✓ streaming_processed: {total:,} rows")
-print(f"✓ CTR: {ctr:.4f} ({ctr*100:.2f}%) | Clicks: {clicks:,} | Impressions: {total:,}")
+# ── Verificación (guardar para el Anexo D) ──────────────────────────────────
+print("\nVerificación — I6..I13 en el stream (esperado: mean~0, stddev~1, igual que en 01):")
+spark.read.table("streaming_processed").select(STD_COLS_DEFAULT).describe().show()
+print("Últimos lotes:")
+(spark.read.table("streaming_metrics")
+      .select("batch_id", "impressions", "ctr_observed", "ctr_predicted", "logloss", "auc",
+              "max_psi", "worst_psi_field", "min_coverage", "model")
+      .orderBy(F.desc("batch_id")).show(5, truncate=False))

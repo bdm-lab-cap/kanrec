@@ -75,11 +75,11 @@ class TestVectorizeModel:
         vectorize_model(model, verbose=False)
         assert type(model.numerical_encoder).__name__ == before
 
-    def test_non_kan_model_returned_unchanged(self):
+    def test_autodis_model_returned_unchanged(self):
         from kanrec.baselines import build_model
 
-        raw = build_model("raw", num_numerical=4, cat_cardinalities=[10])
-        assert vectorize_model(raw, verbose=False) is raw
+        ad = build_model("autodis", num_numerical=4, cat_cardinalities=[10])
+        assert vectorize_model(ad, verbose=False) is ad
 
     def test_fields_stay_independent(self):
         """
@@ -101,3 +101,44 @@ class TestVectorizeModel:
         assert torch.allclose(out1[:, 1:], out2[:, 1:], atol=1e-6), (
             "los demas campos NO deben cambiar: se estan mezclando"
         )
+
+
+class TestVectorizedRaw:
+    """La baseline raw tambien se vectoriza, para que la comparativa de
+    latencia enfrente dos encoders optimizados y no uno contra un bucle."""
+
+    def _raw(self, seed=0, n_fields=13):
+        from kanrec.baselines import build_model
+        torch.manual_seed(seed)
+        m = build_model("raw", num_numerical=n_fields, cat_cardinalities=[20] * 5)
+        m.eval()
+        return m
+
+    def test_encoder_output_matches_original(self):
+        from kanrec.vectorized import VectorizedRawEncoder
+        model = self._raw()
+        vec = VectorizedRawEncoder.from_raw(model.numerical_encoder)
+        x = torch.randn(128, 13) * 3
+        with torch.no_grad():
+            assert torch.allclose(model.numerical_encoder(x), vec(x), atol=1e-6)
+
+    def test_full_model_output_matches(self):
+        model = self._raw()
+        fast = vectorize_model(model, verbose=False)
+        assert fast is not model
+        x_num, x_cat = torch.randn(64, 13), torch.randint(0, 20, (64, 5))
+        with torch.no_grad():
+            assert torch.allclose(model(x_num, x_cat), fast(x_num, x_cat), atol=1e-6)
+
+    def test_fields_stay_independent(self):
+        from kanrec.vectorized import VectorizedRawEncoder
+        vec = VectorizedRawEncoder.from_raw(self._raw().numerical_encoder)
+        x1 = torch.zeros(1, 13)
+        x2 = x1.clone()
+        x2[0, 3] = 5.0
+        with torch.no_grad():
+            out1, out2 = vec(x1), vec(x2)
+        assert not torch.allclose(out1[:, 3], out2[:, 3])
+        mask = torch.ones(13, dtype=torch.bool)
+        mask[3] = False
+        assert torch.equal(out1[:, mask], out2[:, mask])

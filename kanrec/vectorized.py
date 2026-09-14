@@ -3,10 +3,12 @@ Encoder KAN vectorizado.
 
 Motivación (medición, no intuición)
 -----------------------------------
-El perfilado de latencia sobre GPU T4 mostró que el encoder numérico consume
-el **84,5 %** del tiempo de inferencia del modelo completo, y que KAN-REC era
-4,05 veces más lento que la normalización directa (10,45 ms frente a 2,58 ms por
-batch de 4096).
+El perfilado de latencia sobre GPU T4 (memoria, Resultado 5) mostró que el
+encoder numérico consumía la mayor parte del tiempo de inferencia del modelo
+completo y que KAN-REC era varias veces más lento que la normalización
+directa. Las cifras de referencia son las de la tabla de la memoria, medidas
+con ``kanrec.latency.compare_latency`` sobre el checkpoint final; no se
+duplican aquí para que no se desincronicen.
 
 La causa no es que evaluar B-splines sea caro en sí, sino que
 `KANNumericalEncoder.forward` recorre los campos en un **bucle de Python**:
@@ -37,10 +39,17 @@ campo, se obtiene el mismo resultado con un solo kernel:
 Equivalencia numérica
 ---------------------
 `VectorizedKANEncoder.from_field_kans()` copia los pesos de un encoder ya
-entrenado, de modo que la salida es idéntica (hasta precisión de máquina) a
-la del encoder original. La optimización cambia la velocidad, nunca el
-modelo: los tests lo verifican con tolerancia 1e-5 (diferencia medida:
-2.4e-7, precisión de float32).
+entrenado. La optimización cambia la velocidad, nunca el modelo. Dos niveles
+de verificación, y conviene no confundirlos al reportar:
+
+- Los tests unitarios comprueban equivalencia con tolerancia 1e-5 sobre
+  modelos aleatorios en CPU (`tests/test_vectorized.py`).
+- La equivalencia sobre el checkpoint real y en el hardware de servicio se
+  mide con `torch.equal` / diferencia máxima absoluta en el notebook de
+  cierre. Un `bmm` y un `F.linear` pueden redondear distinto en GPU, así
+  que "bit a bit" sólo puede afirmarse si esa medición da exactamente 0;
+  si da ~1e-7, la afirmación correcta es "idéntica hasta precisión de
+  float32".
 
 Cuándo ayuda y cuándo no (medido, no supuesto)
 ----------------------------------------------
@@ -62,6 +71,41 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .encoder import KANNumericalEncoder
+
+
+class VectorizedRawEncoder(nn.Module):
+    """
+    Equivalente vectorizado de ``RawNumericalEncoder`` (la baseline de
+    normalización directa): las 13 proyecciones ``Linear(1, d)`` se evalúan
+    en una única operación elemento a elemento.
+
+    Existe por honestidad en la comparativa de latencia, no porque la
+    baseline lo necesite: ``RawNumericalEncoder`` también recorre los
+    campos en un bucle de Python, así que el sobrecoste "KAN vectorizado
+    frente a raw" medido contra la baseline sin vectorizar compara un
+    encoder optimizado con otro que no lo está. Con ambos vectorizados el
+    sobrecoste que se reporta es el del método, no el del bucle.
+    """
+
+    def __init__(self, num_fields: int, embedding_dim: int):
+        super().__init__()
+        self.num_fields = num_fields
+        self.embedding_dim = embedding_dim
+        self.weight = nn.Parameter(torch.zeros(num_fields, embedding_dim))
+        self.bias = nn.Parameter(torch.zeros(num_fields, embedding_dim))
+
+    @classmethod
+    def from_raw(cls, encoder) -> "VectorizedRawEncoder":
+        vec = cls(encoder.num_fields, encoder.proj[0].out_features)
+        with torch.no_grad():
+            for j, lin in enumerate(encoder.proj):
+                vec.weight[j] = lin.weight.detach()[:, 0]   # Linear(1, d): weight (d, 1)
+                vec.bias[j] = lin.bias.detach()
+        return vec.to(encoder.proj[0].weight.device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, F, 1) * (F, D) + (F, D) -> (B, F, D)
+        return x.unsqueeze(-1) * self.weight + self.bias
 
 
 class VectorizedKANEncoder(nn.Module):
@@ -170,7 +214,8 @@ class VectorizedKANEncoder(nn.Module):
 
 def vectorize_model(model, verbose: bool = True):
     """
-    Devuelve una copia del modelo con el encoder numérico vectorizado.
+    Devuelve una copia del modelo con el encoder numérico vectorizado
+    (KAN o raw; AutoDis se devuelve sin cambios).
 
     El modelo original no se modifica. La salida es numéricamente idéntica;
     solo cambia la velocidad de inferencia.
@@ -181,15 +226,22 @@ def vectorize_model(model, verbose: bool = True):
     """
     import copy
 
-    if not isinstance(model.numerical_encoder, KANNumericalEncoder):
+    from .baselines import RawNumericalEncoder
+
+    enc = model.numerical_encoder
+    if isinstance(enc, KANNumericalEncoder):
+        new_enc = VectorizedKANEncoder.from_field_kans(enc)
+    elif isinstance(enc, RawNumericalEncoder):
+        new_enc = VectorizedRawEncoder.from_raw(enc)
+    else:
         if verbose:
-            print("El modelo no usa KANNumericalEncoder; se devuelve sin cambios.")
+            print(f"{type(enc).__name__} no tiene versión vectorizada; se devuelve sin cambios.")
         return model
 
     fast = copy.deepcopy(model)
-    fast.numerical_encoder = VectorizedKANEncoder.from_field_kans(model.numerical_encoder)
+    fast.numerical_encoder = new_enc
     fast.eval()
     if verbose:
-        print(f"Encoder vectorizado: {model.numerical_encoder.num_fields} campos "
-              f"en 1 kernel (antes {model.numerical_encoder.num_fields} secuenciales)")
+        print(f"Encoder vectorizado ({type(enc).__name__}): {enc.num_fields} campos "
+              f"en 1 kernel (antes {enc.num_fields} lanzamientos secuenciales)")
     return fast

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="kanrec",
-    version="0.3.2",
+    version="0.4.0",
     description="KAN-based continuous numerical encoder for CTR recommendation with symbolic scoring extraction",
     author="Pedro Antonio Martínez Sánchez",
     python_requires=">=3.11",

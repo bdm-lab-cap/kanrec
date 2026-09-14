@@ -2,7 +2,7 @@
 # SUSTITUYE a los antiguos 04_training_kanrec, 07_autodis_baseline y
 # 08_comparativa_encoders, que quedan eliminados del repositorio.
 #
-# Por que se consolidan los tres en uno (revision critica, semana 6):
+# Por que se consolidan los tres en uno (auditoria de tribunal - hallazgo B5/B6):
 #   - Los tres definian KANRecModel por su cuenta, con arquitecturas que no
 #     coincidian entre si ni con el paquete instalable.
 #   - 04 calculaba las cardinalidades categoricas sobre train/val/test
@@ -48,29 +48,6 @@
 # NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
 # los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
 
-# ---------------------------------------------------------------------------
-# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
-#
-# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
-# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
-#   MagicUsageError: %pip magic command is disabled
-#
-# Por eso la primera celda de cada notebook NO instala nada. El paquete se
-# resuelve por una de estas dos vias, ambas compatibles con pipeline:
-#
-#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
-#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
-#
-#          import sys
-#          sys.path.insert(0, "/lakehouse/default/Files/libs")
-#
-#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
-#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
-#      Publicar -> asignar el entorno al workspace o al notebook.
-#
-# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
-# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
-# ---------------------------------------------------------------------------
 import json
 import os
 import time
@@ -145,7 +122,7 @@ print(f"Cardinalidades categoricas (sobre TRAIN completo): {cat_cardinalities}")
 
 
 # ============================================================================
-# CELDA 3 — Dataset con muestreo ALEATORIO real (corregido en la revision critica)
+# CELDA 3 — Dataset con muestreo ALEATORIO real (hallazgo A4)
 # ============================================================================
 class CriteoDataset(Dataset):
     """
@@ -237,6 +214,7 @@ def train_one_run(
     lr: float | None = None,
     embedding_dim: int = 16,
     grid_size: int = 10,
+    ckpt_tag: str = "",
 ) -> dict:
     torch.manual_seed(seed)
     lr = lr if lr is not None else DEFAULT_LR[encoder_name]
@@ -249,14 +227,16 @@ def train_one_run(
         kan_grid_size=grid_size,
     ).to(device)
 
-    # Calibracion del grid (corregido en la revision critica): solo kan-bspline la necesita.
+    # Calibracion del grid (hallazgo A3): solo kan-bspline la necesita.
     # Se hace SIEMPRE sobre datos normalizados (celda 01 ya garantiza esto),
     # con una muestra generosa para cubrir bien la distribucion de cada campo.
     if hasattr(model, "calibrate"):
-        # 50k filas, no 5 lotes fijos (verificado empiricamente). Con solo ~5k-10k filas de muestra la
+        # 50k filas, no 5 lotes fijos (hallazgo verificado tras la primera
+        # corrida real en Fabric: I6 e I12 llegan a ~690 desviaciones tipicas
+        # en Criteo -- colas extremas). Con solo ~5k-10k filas de muestra la
         # probabilidad de capturar esos outliers era baja, y el grid
         # calibrado podia dejarlos fuera de cobertura (el mismo problema del
-        # la revision critica, para esas pocas filas concretas). Acumular por FILAS
+        # hallazgo A3, para esas pocas filas concretas). Acumular por FILAS
         # en vez de por numero de lotes es ademas robusto a que cada script
         # use un batch_size distinto.
         CALIB_ROWS = 50_000
@@ -285,7 +265,7 @@ def train_one_run(
     # grid_size va en el nombre: si no, la ablacion de la CELDA 7 (que
     # reentrena kan-bspline con distintos grid_size sobre la MISMA seed 42)
     # sobreescribiria el checkpoint de la comparativa principal.
-    ckpt_path = f"{CKPT_PATH}/best_{encoder_name}_gs{grid_size}_s{seed}.pt"
+    ckpt_path = f"{CKPT_PATH}/best_{encoder_name}_gs{grid_size}_s{seed}{ckpt_tag}.pt"
     best_val_auc, patience_ctr = 0.0, 0
     t0 = time.time()
 
@@ -388,6 +368,31 @@ print("\n✓ Tables/experiment_results escrita.")
 
 
 # ============================================================================
+# CELDA 6b — Manifiesto de cada checkpoint (lo exige 06 para servir)
+# ============================================================================
+# Un state_dict desnudo no dice con que normalizacion se entreno ni con que
+# version del paquete. El manifiesto deja junto a cada checkpoint: version
+# de kanrec, commit, columnas, cardinalidades, hiperparametros, hash del
+# propio checkpoint y hash de scaler_stats.json. 06 verifica ambos hashes
+# antes de puntuar una sola impresion (kanrec.serving.check_manifest).
+from kanrec.serving import write_manifest
+
+STATS_PATH = "/lakehouse/default/Files/config/scaler_stats.json"
+for r in results:
+    ckpt = f"{CKPT_PATH}/best_{r['encoder']}_gs10_s{r['seed']}.pt"   # la comparativa usa el grid_size por defecto (10)
+    if not os.path.exists(ckpt):
+        print(f"  (sin checkpoint para {ckpt}, se omite)")
+        continue
+    mpath = write_manifest(
+        ckpt, numerical_cols=NUMERICAL_COLS, categorical_cols=idx_cols,
+        scaler_stats_path=STATS_PATH,
+        extra={k: r[k] for k in ("seed", "epochs", "val_auc", "test_auc", "test_logloss",
+                                 "train_seconds", "n_params") if k in r},
+    )
+    print(f"  ✓ manifiesto: {mpath}")
+
+
+# ============================================================================
 # CELDA 7 (opcional) — Ablacion ligera de grid_size, solo KAN-REC
 # ============================================================================
 # Un resultado adicional barato: si grid_size=5 (el valor por defecto de
@@ -395,9 +400,15 @@ print("\n✓ Tables/experiment_results escrita.")
 # calibra, es evidencia de que la capacidad del spline importa una vez que
 # el rango es el correcto — que es justo lo que la memoria puede reportar
 # como "Resultado 2" ademas de la comparativa principal.
+# Los tres valores se entrenan con el MISMO presupuesto (15 epocas,
+# paciencia 2) para que la ablacion sea comparable entre si. Sus checkpoints
+# llevan sufijo "_abl": sin el, la corrida con grid_size=10 y seed=42
+# SOBREESCRIBIA el checkpoint de la comparativa principal (30 epocas), que es
+# el que 05 y 06 cargan, con una version entrenada con la mitad de epocas.
 ablation_results = []
 for grid_size in [5, 10, 20]:
-    r = train_one_run("kan-bspline", seed=42, grid_size=grid_size, max_epochs=15, patience=2)
+    r = train_one_run("kan-bspline", seed=42, grid_size=grid_size, max_epochs=15, patience=2,
+                      ckpt_tag="_abl")
     r["grid_size"] = grid_size
     ablation_results.append(r)
 

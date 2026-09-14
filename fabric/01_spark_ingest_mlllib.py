@@ -21,7 +21,7 @@
 # puede haber quedado instalado en el entorno pip aislado de la sesion
 # anterior y un simple re-run de la celda no lo revierte.
 #
-# Correccion aplicada en la revision critica
+# Fix applied (2026-09, auditoria de tribunal - hallazgo A2)
 # --------------------------------------------------------------
 # StandardScaler used to write its output into a NEW vector column
 # ("num_scaled") that no downstream notebook ever read: every training
@@ -34,29 +34,6 @@
 # and stddev ~1.0 in the printed summary. Keep that output for the
 # memoria's Anexo D (evidence that the pipeline does what it claims).
 
-# ---------------------------------------------------------------------------
-# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
-#
-# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
-# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
-#   MagicUsageError: %pip magic command is disabled
-#
-# Por eso la primera celda de cada notebook NO instala nada. El paquete se
-# resuelve por una de estas dos vias, ambas compatibles con pipeline:
-#
-#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
-#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
-#
-#          import sys
-#          sys.path.insert(0, "/lakehouse/default/Files/libs")
-#
-#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
-#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
-#      Publicar -> asignar el entorno al workspace o al notebook.
-#
-# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
-# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
-# ---------------------------------------------------------------------------
 import json, os
 import numpy as np
 from pyspark.sql import functions as F
@@ -122,7 +99,7 @@ raw = (spark.read
        .schema(schema)
        .csv("Files/raw/criteo_10m.tsv"))
 
-# NOTA (limitacion conocida): los nulos se imputan a 0.0 sin una mascara
+# NOTA (deferred, hallazgo B9): los nulos se imputan a 0.0 sin una mascara
 # de "is_null" separada, así que "ausente" y "vale cero" quedan fusionados.
 # En Criteo el patron de ausencia es predictivo por si mismo; anadir 13
 # columnas binarias I{j}_is_null es la mejora natural del siguiente pase,
@@ -152,14 +129,15 @@ print(f"Total rows: {total:,}")
 
 train_raw, val_raw, test_raw = raw.randomSplit([0.8, 0.1, 0.1], seed=42)
 
-def log1p_safe(df, cols):
-    for c in cols:
-        df = df.withColumn(c, F.log1p(F.greatest(F.col(c), F.lit(0.0))))
-    return df
+# Imputacion + log1p con la MISMA funcion que usa 06 sobre el stream
+# (kanrec.spark_utils). La imputacion ya se aplico sobre `raw` antes de
+# materializar; volver a aplicarla es idempotente (abs de no negativos sin
+# nulos). log1p se aplica aqui una unica vez.
+from kanrec.spark_utils import impute_and_log, apply_scaler as _apply_scaler, apply_index_maps
 
-train_log = log1p_safe(train_raw, LOG_COLS)
-val_log   = log1p_safe(val_raw,   LOG_COLS)
-test_log  = log1p_safe(test_raw,  LOG_COLS)
+train_log = impute_and_log(train_raw, NUMERICAL_COLS, LOG_COLS)
+val_log   = impute_and_log(val_raw,   NUMERICAL_COLS, LOG_COLS)
+test_log  = impute_and_log(test_raw,  NUMERICAL_COLS, LOG_COLS)
 
 # ── Normalizacion numerica (StandardScaler nativo, columna a columna) ───────
 # Se calcula media y desviacion sobre TRAIN y se aplica a los tres splits.
@@ -177,10 +155,10 @@ scaler_stats = {c: (float(_stats[f"m_{c}"]),
                 for c in STD_COLS}
 
 def apply_scaler(df):
-    for c in STD_COLS:
-        m, s = scaler_stats[c]
-        df = df.withColumn(c, (F.col(c) - F.lit(m)) / F.lit(s))
-    return df
+    # Delegado en kanrec.spark_utils.apply_scaler: la misma funcion, con los
+    # mismos estadisticos (persistidos mas abajo en scaler_stats.json), es la
+    # que 06 aplica al stream.
+    return _apply_scaler(df, scaler_stats, STD_COLS)
 
 # ── Indexado categorico (nativo, join broadcast) ────────────────────────────
 # NO se usa StringIndexer: su serializador interno de metadatos parsea como
@@ -222,18 +200,19 @@ def apply_scaler_and_index(df, name):
     """
     df = apply_scaler(df)
     CHUNK = 6
-    for i in range(0, len(CATEGORICAL_COLS), CHUNK):
-        for c in CATEGORICAL_COLS[i:i + CHUNK]:
-            mapping, n_cats = index_maps[c]
-            df = (df.join(F.broadcast(mapping), on=c, how="left")
-                    .withColumn(f"{c}_idx",
-                                F.coalesce(F.col(f"{c}_idx"), F.lit(n_cats)).cast("int")))
+
+    def _materialize(df_chunk, i):
         tmp = f"_tmp_{name}_{i}"
-        df.write.format("delta").mode("overwrite") \
-          .option("overwriteSchema", "true").saveAsTable(tmp)
-        df = spark.read.table(tmp)          # corta el linaje del plan
+        df_chunk.write.format("delta").mode("overwrite") \
+                .option("overwriteSchema", "true").saveAsTable(tmp)
         print(f"  {name}: {min(i + CHUNK, len(CATEGORICAL_COLS))}/{len(CATEGORICAL_COLS)} categoricas indexadas")
-    return df
+        return spark.read.table(tmp)        # corta el linaje del plan
+
+    # El bucle de joins vive en kanrec.spark_utils.apply_index_maps, la
+    # misma funcion que 06 aplica al stream (alli sin materializar: los
+    # lotes son pequenos y el plan no crece hasta romperse).
+    return apply_index_maps(df, index_maps, CATEGORICAL_COLS, chunk=CHUNK,
+                            materialize=_materialize)
 
 print("Transforming splits (materializando por bloques)...")
 train_t = apply_scaler_and_index(train_log, "train")
@@ -298,7 +277,7 @@ written.select(STD_COLS).describe().show()
 
 # Asercion dura: si I6..I13 NO estan normalizadas en la tabla escrita, parar
 # aqui con un error claro en vez de dejar que 04/05 entrenen sobre datos
-# crudos y produzcan curvas espuriamente lineales (corregido en la revision critica).
+# crudos y produzcan curvas espuriamente lineales (hallazgo A2).
 from pyspark.sql import functions as F
 stats = written.select(
     *[F.stddev(c).alias(f"std_{c}") for c in STD_COLS]

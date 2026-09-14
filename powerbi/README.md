@@ -7,7 +7,7 @@
 > **Origen de las tablas.** Todas las que consume este panel las crean los
 > notebooks de Fabric, ninguna se construye a mano:
 > `experiment_results` ← `04`; `streaming_kfk` ← Eventstream (Confluent);
-> `streaming_processed` ← `06`;
+> `streaming_processed`, `streaming_predictions`, `streaming_metrics`, `streaming_drift` ← `06`;
 > `symbolic_results`, `spline_curves` y `baseline_metrics` ← `05` (celda final).
 
 ## Estructura del dashboard (4 páginas)
@@ -31,7 +31,10 @@
 - `kanrec_lakehouse.experiment_results` → métricas de entrenamiento
 - `kanrec_lakehouse.symbolic_results`   → fórmulas extraídas por campo/seed
 - `kanrec_lakehouse.baseline_metrics`   → thresholds para alertas
-- `kanrec_lakehouse.streaming_processed` → datos en tiempo real (Página 4)
+- `kanrec_lakehouse.streaming_processed`   → impresiones normalizadas del stream (Página 4)
+- `kanrec_lakehouse.streaming_predictions` → P(click) por impresión, modelo y lote (Página 4)
+- `kanrec_lakehouse.streaming_metrics`     → por lote: CTR observado vs predicho, log-loss, AUC, PSI máx, cobertura mín (Página 4)
+- `kanrec_lakehouse.streaming_drift`       → por lote y campo: PSI, nivel, cobertura del rango calibrado (Página 4)
 - `kanrec_lakehouse.spline_curves`      → curvas φ evaluadas en grid (Página 1)
 
 ---
@@ -157,7 +160,44 @@ curves_df.to_parquet("spline_curves.parquet", index=False)
 - **Gráfico de dispersión**: latencia vs AUC por encoder
 - **Tabla de ablaciones**: grid_size vs AUC
 
-### Página 4: Real-Time CTR
-- **Gráfico de líneas en tiempo real** (streaming_processed): clics por minuto
-- **KPI card**: CTR actual vs baseline
-- **Mapa de calor**: distribución de features numéricas del stream
+### Página 4: Real-Time CTR — el modelo en servicio
+- **Líneas, eje X = batch_id** (streaming_metrics): `ctr_observed` y `ctr_predicted`
+  superpuestas. Es la imagen del modelo sirviendo: si las dos líneas se separan,
+  el modelo está descalibrado respecto al tráfico.
+- **KPI cards** (último lote): AUC online, log-loss, impresiones, modelo (`model`,
+  checkpoint@sha) — el mismo hash que verifica `check_manifest` en 06.
+- **Histograma** (streaming_predictions): distribución de `p_click` del último lote.
+- **Matriz campo × lote** (streaming_drift): `psi` con formato condicional por
+  `psi_level` (ok / warning / alert) y `coverage` con umbral 0,99. La cobertura
+  es la señal propia de KAN-REC: fracción del lote que cae dentro del rango de
+  nudos calibrado de cada φⱼ, es decir, dentro de la curva que se auditó.
+
+Medidas DAX de la página 4:
+
+```dax
+-- Desviación de calibración del último lote (predicho - observado, en puntos de CTR)
+Calib_Gap_pp =
+VAR ultimo = MAX(streaming_metrics[batch_id])
+RETURN 100 * (
+    CALCULATE(MAX(streaming_metrics[ctr_predicted]), streaming_metrics[batch_id] = ultimo)
+  - CALCULATE(MAX(streaming_metrics[ctr_observed]),  streaming_metrics[batch_id] = ultimo)
+)
+
+-- Campos en alerta de deriva en el último lote
+Campos_En_Alerta =
+VAR ultimo = MAX(streaming_drift[batch_id])
+RETURN CALCULATE(
+    COUNTROWS(streaming_drift),
+    streaming_drift[batch_id] = ultimo,
+    streaming_drift[psi_level] = "alert" || streaming_drift[coverage_alert] = TRUE()
+)
+```
+
+### Reglas de Data Activator (sobre `streaming_metrics` y `streaming_drift`)
+
+| Regla | Condición | Por qué |
+|---|---|---|
+| Descalibración | `ABS(ctr_predicted - ctr_observed) > 0.03` en 2 lotes seguidos | El modelo sigue ordenando bien (AUC) pero sus probabilidades ya no son fiables para pujar. |
+| Deriva de entrada | `psi_level = "alert"` en cualquier campo | La distribución de un campo ha cambiado respecto a train: candidato a reentrenar. |
+| Fuera de la curva auditada | `coverage < 0.99` en cualquier campo | Parte del tráfico se evalúa fuera del grid calibrado, donde φⱼ ya no es la curva extraída ni la fórmula persistida en MongoDB. Señal exclusiva de un encoder interpretable. |
+| Modelo cambiado | `model` del último lote ≠ `model` del anterior | Trazabilidad: quién sirvió qué. |

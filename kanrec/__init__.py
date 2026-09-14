@@ -8,7 +8,7 @@ without pulling in torch, scipy or pymongo.
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 _LAZY: dict[str, str] = {
     "KANNumericalEncoder": ".encoder",
@@ -23,11 +23,17 @@ _LAZY: dict[str, str] = {
     "substitution_ablation": ".ablation",
     "measure_latency": ".latency",
     "VectorizedKANEncoder": ".vectorized",
+    "VectorizedRawEncoder": ".vectorized",
     "vectorize_model": ".vectorized",
-    "set_seed": ".reproducibility",
-    "coverage_drift": ".drift",
-    "distribution_drift": ".drift",
+    "DriftReference": ".drift",
     "drift_report": ".drift",
+    "calibrated_ranges": ".drift",
+    "load_model": ".serving",
+    "Scorer": ".serving",
+    "score_spark": ".serving",
+    "write_manifest": ".serving",
+    "check_manifest": ".serving",
+    "set_seed": ".reproducibility",
     "SymbolicResult": ".schema",
     "compare_latency": ".latency",
     "MongoSymbolicStore": ".mongo_store",
@@ -36,6 +42,8 @@ _LAZY: dict[str, str] = {
     "confluent_config": ".config",
     "apply_pipeline_and_unpack": ".spark_utils",
     "random_sample": ".spark_utils",
+    "normalise_like_train": ".spark_utils",
+    "load_index_maps": ".spark_utils",
 }
 
 __all__ = [*_LAZY, "__version__"]
@@ -47,10 +55,11 @@ if TYPE_CHECKING:  # pragma: no cover - static analysers only
     from .encoder import KANNumericalEncoder
     from .ablation import substitution_ablation
     from .latency import compare_latency, measure_latency
-    from .drift import coverage_drift, distribution_drift, drift_report
     from .reproducibility import set_seed
     from .schema import SymbolicResult
-    from .vectorized import VectorizedKANEncoder, vectorize_model
+    from .vectorized import VectorizedKANEncoder, VectorizedRawEncoder, vectorize_model
+    from .drift import DriftReference, calibrated_ranges, drift_report
+    from .serving import Scorer, check_manifest, load_model, score_spark, write_manifest
     from .faithfulness import FaithfulnessEvaluator
     from .model import CTRModel, InteractionMLP, KANRecModel
     from .mongo_store import MongoSymbolicStore

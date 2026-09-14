@@ -1,369 +1,287 @@
 """
-Detección de deriva sobre un encoder interpretable.
+Detección de deriva sobre las entradas numéricas del modelo en servicio.
 
-El punto de partida conceptual
-------------------------------
-Un modelo desplegado está congelado, así que su función de codificación φⱼ
-**no cambia por sí sola**: depende solo de los pesos, no de los datos que se
-le pasen. Monitorizar «si φ cambia» en un modelo fijo daría cero por
-construcción.
+Dos señales, ambas calculadas por campo y por lote del stream:
 
-Lo que sí puede derivar son dos cosas distintas, y este módulo las separa:
+1. **Cobertura del rango calibrado.** Cada φⱼ del encoder KAN tiene un
+   grid de nudos ajustado a la distribución de entrenamiento (ver
+   ``KANNumericalEncoder.calibrate``). Fuera de ese rango todas las bases
+   B-spline valen cero y φⱼ degenera en la ruta base ``w·SiLU(x)``: el
+   modelo sigue devolviendo un número, pero ya no es la curva que se
+   auditó ni la fórmula que se extrajo. La cobertura es la fracción de
+   valores del lote que caen dentro del rango calibrado. Es una señal que
+   sólo existe porque el encoder es interpretable: una capa densa no tiene
+   un rango "válido" que vigilar.
 
-1. **Cobertura** — ¿siguen los datos entrantes dentro del rango donde se
-   calibró la spline de cada campo? Fuera de ese rango las funciones base
-   valen cero y el encoder degenera en su ruta lineal: la fórmula extraída
-   deja de describir lo que el modelo hace con esa fila. Es el la revision critica
-   de este proyecto, pero en producción y de forma continua.
+2. **PSI (Population Stability Index).** Divergencia entre la distribución
+   de referencia (train) y la del lote, sobre bins de cuantiles fijados en
+   la referencia. Umbrales habituales en scoring: < 0,10 estable,
+   0,10–0,25 vigilar, > 0,25 deriva.
 
-2. **Distribución** — ¿ha cambiado la forma de la distribución de entrada,
-   aunque siga dentro del rango? Se mide con PSI, el índice estándar en
-   riesgo de crédito y CTR.
-
-3. **Simbólica (EXPERIMENTAL)** — ¿ha cambiado la *relación* entre la
-   variable y el clic, de modo que φ ya no la describe? Requiere reajustar
-   sobre datos recientes y comparar la forma resultante con la de
-   referencia.
-
-   Su poder discriminante es **limitado y así debe reportarse**. Medido
-   sobre datos sintéticos en los que la relación cambia en un único campo
-   conocido, con reajuste suave (4 épocas, lr 5e-4):
-
-       campo   control   con deriva   ratio
-       I1        0.048        0.153    3.2x   <- aqui cambio la relacion
-       I2        0.066        0.116    1.8x
-       I3        0.165        0.255    1.5x
-       I4        0.062        0.089    1.4x
-       I5        0.085        0.126    1.5x
-
-   El campo realmente derivado tiene el mayor *ratio*, pero **no el mayor
-   valor absoluto**: I3 alcanza 0.255 sin que su relación haya cambiado,
-   porque cada campo tiene su propio suelo de ruido de reajuste. Un umbral
-   absoluto da falsos positivos y una puntuación relativa entre campos
-   tampoco separa de forma fiable con pocos campos.
-
-   Descartado por el camino, con medición: comparar las curvas de dos
-   modelos entrenados por separado no sirve en absoluto (error 3.9 entre
-   dos modelos de la MISMA relación), porque las dimensiones del embedding
-   no son identificables y cada entrenamiento aprende una base distinta.
-   Por eso el reajuste parte del modelo desplegado y no de cero.
-
-   Se incluye como señal exploratoria y como línea de trabajo: una
-   comparación pareada contra un reajuste de control sobre datos conocidos
-   como estables cancelaría el suelo de ruido por campo, pero exige
-   disponer de esos datos, que es justo lo que no se tiene en producción.
-
-Por qué esto es posible aquí y no con otros encoders
-----------------------------------------------------
-Las señales 1 y 3 existen porque el encoder es interpretable. Con una capa
-densa o con AutoDis no hay «rango calibrado» que vigilar ni «forma
-funcional» que comparar: solo quedan métricas agregadas, que detectan la
-degradación cuando ya ha ocurrido. Aquí la auditoría del modelo deja de ser
-un informe puntual y pasa a ser un proceso continuo.
+Diseño
+------
+- numpy puro. torch sólo se toca en ``calibrated_ranges``, que importa el
+  encoder de forma perezosa, para que el módulo sea usable desde un
+  notebook de Spark sin cargar el modelo.
+- La referencia (bordes de bins + frecuencias esperadas) se calcula una
+  vez sobre train y se persiste como JSON (``DriftReference``), de modo
+  que el procesamiento del stream no relee train en cada ejecución.
+- La tercera señal que se evaluó y descartó en la memoria (deriva de la
+  forma funcional de φⱼ reajustada sobre el lote) no está aquí a propósito:
+  las dimensiones del embedding no son identificables entre entrenamientos
+  y la medida no discrimina.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+import json
+from dataclasses import dataclass, field
 
 import numpy as np
-import torch
 
-from .symbolic import OPERATOR_LIBRARY
+# Umbrales estándar de PSI en modelos de scoring.
+PSI_WARNING = 0.10
+PSI_ALERT = 0.25
+# Por debajo de esta cobertura, una parte relevante del lote se está
+# evaluando fuera de la curva auditada.
+COVERAGE_ALERT = 0.99
 
-#: Umbrales de PSI habituales en la industria (riesgo de crédito, CTR).
-PSI_ESTABLE = 0.10
-PSI_MODERADO = 0.25
 
-#: Fracción de filas fuera del rango calibrado a partir de la cual la
-#: fórmula deja de ser una descripción válida para esas filas.
-COBERTURA_AVISO = 0.01
-COBERTURA_CRITICA = 0.05
-
+# ── Referencia (se calcula una vez sobre train) ──────────────────────────────
 
 @dataclass
-class DriftSignal:
-    """Una señal de deriva para un campo."""
-    field_name: str
-    signal: str          # "cobertura" | "distribucion" | "simbolica"
-    value: float
-    threshold: float
-    status: str          # "ok" | "aviso" | "critico"
-    detail: str = ""
+class DriftReference:
+    """
+    Bins de cuantiles y frecuencias esperadas por campo, ajustados sobre la
+    distribución de entrenamiento. Serializable a JSON.
 
-    def to_row(self) -> dict:
-        return {
-            "field_name": self.field_name,
-            "signal": self.signal,
-            "value": float(self.value),
-            "threshold": float(self.threshold),
-            "status": self.status,
-            "detail": self.detail,
+    Attributes:
+        field_names: nombres de los campos numéricos, en el orden del modelo.
+        edges:       bordes de bins por campo (n_bins + 1 valores). Los
+                     extremos son -inf/+inf para que ningún valor quede fuera.
+        expected:    frecuencia relativa de train en cada bin (suma 1).
+        n_ref:       número de filas de referencia usadas.
+    """
+    field_names: list[str]
+    edges: list[list[float]]
+    expected: list[list[float]]
+    n_ref: int = 0
+    calibrated_ranges: list[list[float]] = field(default_factory=list)
+
+    # ── construcción ──
+    @classmethod
+    def fit(cls, x_ref: np.ndarray, field_names: list[str], n_bins: int = 10,
+            calibrated_ranges: list[tuple[float, float]] | None = None) -> "DriftReference":
+        """
+        Ajusta bins de cuantiles sobre la referencia.
+
+        Los bordes se toman de los cuantiles de train, no equiespaciados:
+        con colas tan pesadas como las de Criteo, bins uniformes dejarían
+        casi todo el volumen en uno o dos bins y el PSI sería ciego.
+        Cuantiles repetidos (campos con muchos ceros) se deduplican, así que
+        el número efectivo de bins puede ser menor que ``n_bins``.
+        """
+        x_ref = _as_2d(x_ref)
+        if x_ref.shape[1] != len(field_names):
+            raise ValueError(
+                f"x_ref tiene {x_ref.shape[1]} columnas y field_names {len(field_names)}"
+            )
+        edges_all, expected_all = [], []
+        qs = np.linspace(0.0, 1.0, n_bins + 1)[1:-1]
+        for j in range(x_ref.shape[1]):
+            col = x_ref[:, j]
+            col = col[np.isfinite(col)]
+            inner = np.unique(np.quantile(col, qs)) if col.size else np.array([])
+            edges = np.concatenate([[-np.inf], inner, [np.inf]])
+            counts, _ = np.histogram(col, bins=edges)
+            expected = counts / max(counts.sum(), 1)
+            edges_all.append([float(e) for e in edges])
+            expected_all.append([float(p) for p in expected])
+        ranges = [[float(lo), float(hi)] for lo, hi in (calibrated_ranges or [])]
+        return cls(field_names=list(field_names), edges=edges_all,
+                   expected=expected_all, n_ref=int(x_ref.shape[0]),
+                   calibrated_ranges=ranges)
+
+    # ── serialización ──
+    def to_json(self) -> str:
+        return json.dumps({
+            "field_names": self.field_names,
+            "edges": [[_inf_to_str(e) for e in row] for row in self.edges],
+            "expected": self.expected,
+            "n_ref": self.n_ref,
+            "calibrated_ranges": self.calibrated_ranges,
+        }, indent=2)
+
+    @classmethod
+    def from_json(cls, text: str) -> "DriftReference":
+        d = json.loads(text)
+        return cls(
+            field_names=d["field_names"],
+            edges=[[_str_to_inf(e) for e in row] for row in d["edges"]],
+            expected=d["expected"],
+            n_ref=int(d.get("n_ref", 0)),
+            calibrated_ranges=d.get("calibrated_ranges", []),
+        )
+
+    def save(self, path: str) -> None:
+        with open(path, "w") as f:
+            f.write(self.to_json())
+
+    @classmethod
+    def load(cls, path: str) -> "DriftReference":
+        with open(path) as f:
+            return cls.from_json(f.read())
+
+
+# ── Señales ──────────────────────────────────────────────────────────────────
+
+def psi(expected: np.ndarray, actual: np.ndarray, eps: float = 1e-4) -> float:
+    """
+    Population Stability Index entre dos vectores de frecuencias relativas
+    sobre los mismos bins.
+
+        PSI = Σ (actual - expected) · ln(actual / expected)
+
+    ``eps`` evita log(0) en bins vacíos; el valor es el habitual en la
+    práctica de scoring y su efecto sobre el resultado es despreciable
+    salvo en bins que la referencia también tiene vacíos.
+    """
+    e = np.clip(np.asarray(expected, dtype=float), eps, None)
+    a = np.clip(np.asarray(actual, dtype=float), eps, None)
+    e, a = e / e.sum(), a / a.sum()
+    return float(np.sum((a - e) * np.log(a / e)))
+
+
+def psi_level(value: float) -> str:
+    """Clasifica un PSI en 'ok' / 'warning' / 'alert' con los umbrales estándar."""
+    if value >= PSI_ALERT:
+        return "alert"
+    if value >= PSI_WARNING:
+        return "warning"
+    return "ok"
+
+
+def range_coverage(x: np.ndarray, low: float, high: float) -> float:
+    """
+    Fracción de valores de ``x`` dentro de ``[low, high]`` (inclusive).
+    Valores no finitos cuentan como fuera de rango: un NaN tampoco cae en
+    la curva calibrada.
+    """
+    x = np.asarray(x, dtype=float).ravel()
+    if x.size == 0:
+        return float("nan")
+    inside = np.isfinite(x) & (x >= low) & (x <= high)
+    return float(inside.mean())
+
+
+def calibrated_ranges(encoder) -> list[tuple[float, float]]:
+    """
+    Rango calibrado ``(low, high)`` de cada campo de un
+    ``KANNumericalEncoder`` (o de su versión vectorizada), leído del buffer
+    ``grid`` del checkpoint. Importa torch de forma perezosa.
+    """
+    if hasattr(encoder, "field_range"):                       # KANNumericalEncoder
+        return [tuple(encoder.field_range(j)) for j in range(encoder.num_fields)]
+    if hasattr(encoder, "grid") and hasattr(encoder, "spline_order"):  # VectorizedKANEncoder
+        k = encoder.spline_order
+        out = []
+        for j in range(encoder.num_fields):
+            core = encoder.grid[j, k:-k] if k > 0 else encoder.grid[j]
+            out.append((float(core[0]), float(core[-1])))
+        return out
+    raise TypeError(
+        f"{type(encoder).__name__} no expone un grid calibrado; sólo el encoder KAN lo tiene."
+    )
+
+
+# ── Informe por lote ─────────────────────────────────────────────────────────
+
+def drift_report(x_batch: np.ndarray, reference: DriftReference,
+                 calibrated: list[tuple[float, float]] | None = None) -> list[dict]:
+    """
+    Calcula, para un lote ``x_batch`` [n, n_fields], una fila por campo con:
+
+        field, n, psi, psi_level, coverage, coverage_alert,
+        share_below, share_above, cal_low, cal_high
+
+    ``calibrated`` puede omitirse si la referencia ya lleva los rangos
+    (``DriftReference.fit(..., calibrated_ranges=...)``). Si no hay rangos
+    en ninguno de los dos sitios, la cobertura se reporta como NaN y sin
+    alerta: no se inventa un rango.
+    """
+    x = _as_2d(x_batch)
+    if x.shape[1] != len(reference.field_names):
+        raise ValueError(
+            f"el lote tiene {x.shape[1]} columnas y la referencia {len(reference.field_names)}"
+        )
+    ranges = calibrated if calibrated is not None else (
+        [tuple(r) for r in reference.calibrated_ranges] or None
+    )
+    rows = []
+    for j, name in enumerate(reference.field_names):
+        col = x[:, j]
+        finite = col[np.isfinite(col)]
+        counts, _ = np.histogram(finite, bins=np.asarray(reference.edges[j]))
+        actual = counts / max(counts.sum(), 1)
+        value = psi(reference.expected[j], actual)
+
+        row = {
+            "field": name, "n": int(col.size),
+            "psi": value, "psi_level": psi_level(value),
+            "coverage": float("nan"), "coverage_alert": False,
+            "share_below": float("nan"), "share_above": float("nan"),
+            "cal_low": float("nan"), "cal_high": float("nan"),
         }
+        if ranges is not None:
+            lo, hi = ranges[j]
+            cov = range_coverage(col, lo, hi)
+            row.update({
+                "coverage": cov,
+                "coverage_alert": bool(np.isfinite(cov) and cov < COVERAGE_ALERT),
+                "share_below": float(np.mean(col < lo)) if col.size else float("nan"),
+                "share_above": float(np.mean(col > hi)) if col.size else float("nan"),
+                "cal_low": float(lo), "cal_high": float(hi),
+            })
+        rows.append(row)
+    return rows
 
 
-# ── 1. Cobertura del rango calibrado ───────────────────────────────────────
-
-def coverage_drift(model, x_new: torch.Tensor,
-                   field_names: list[str] | None = None) -> list[DriftSignal]:
-    """
-    Fracción de filas que caen fuera del rango donde se calibró cada spline.
-
-    Fuera de ese rango el encoder no usa la spline: la fórmula extraída no
-    describe su comportamiento sobre esas filas. Es la señal más barata
-    (no requiere gradientes ni reajuste) y la más accionable: si se dispara,
-    hay que recalibrar.
-
-    Args:
-        model:       modelo desplegado (con `numerical_encoder`).
-        x_new:       [n, num_fields] datos recientes YA normalizados.
-        field_names: nombres de campo; por defecto I1..In.
-    """
-    encoder = model.numerical_encoder
-    n_fields = encoder.num_fields
-    field_names = field_names or [f"I{j+1}" for j in range(n_fields)]
-
-    señales = []
-    for j in range(n_fields):
-        lo, hi = encoder.field_range(j)
-        col = x_new[:, j]
-        fuera = ((col < lo) | (col > hi)).float().mean().item()
-
-        status = ("critico" if fuera >= COBERTURA_CRITICA
-                  else "aviso" if fuera >= COBERTURA_AVISO else "ok")
-        señales.append(DriftSignal(
-            field_name=field_names[j],
-            signal="cobertura",
-            value=fuera,
-            threshold=COBERTURA_CRITICA,
-            status=status,
-            detail=(f"rango calibrado [{lo:.2f}, {hi:.2f}]; "
-                    f"observado [{col.min():.2f}, {col.max():.2f}]"),
-        ))
-    return señales
-
-
-# ── 2. Deriva de distribución (PSI) ────────────────────────────────────────
-
-def _psi(ref: np.ndarray, new: np.ndarray, n_bins: int = 10,
-         eps: float = 1e-6) -> float:
-    """
-    Population Stability Index entre dos muestras.
-
-    Los cortes se toman por cuantiles de la REFERENCIA, no de los datos
-    nuevos: si se recalculasen sobre los nuevos, el índice sería siempre
-    próximo a cero por construcción y no detectaría nada.
-    """
-    cortes = np.quantile(ref, np.linspace(0, 1, n_bins + 1))
-    cortes[0], cortes[-1] = -np.inf, np.inf
-    cortes = np.unique(cortes)
-    if len(cortes) < 3:              # referencia casi constante
-        return 0.0
-
-    p_ref, _ = np.histogram(ref, bins=cortes)
-    p_new, _ = np.histogram(new, bins=cortes)
-    p_ref = p_ref / max(p_ref.sum(), 1) + eps
-    p_new = p_new / max(p_new.sum(), 1) + eps
-    return float(np.sum((p_new - p_ref) * np.log(p_new / p_ref)))
-
-
-def distribution_drift(x_ref: torch.Tensor, x_new: torch.Tensor,
-                       field_names: list[str] | None = None,
-                       n_bins: int = 10) -> list[DriftSignal]:
-    """
-    PSI por campo entre la muestra de referencia (la de entrenamiento) y la
-    ventana reciente.
-
-    Interpretación estándar: < 0,10 estable; 0,10–0,25 cambio moderado;
-    > 0,25 cambio significativo que justifica reentrenar.
-    """
-    n_fields = x_ref.shape[1]
-    field_names = field_names or [f"I{j+1}" for j in range(n_fields)]
-
-    señales = []
-    for j in range(n_fields):
-        valor = _psi(x_ref[:, j].cpu().numpy(), x_new[:, j].cpu().numpy(), n_bins)
-        status = ("critico" if valor >= PSI_MODERADO
-                  else "aviso" if valor >= PSI_ESTABLE else "ok")
-        señales.append(DriftSignal(
-            field_name=field_names[j],
-            signal="distribucion",
-            value=valor,
-            threshold=PSI_MODERADO,
-            status=status,
-            detail=f"PSI sobre {n_bins} cuantiles de la referencia",
-        ))
-    return señales
-
-
-# ── 3. Deriva simbólica ────────────────────────────────────────────────────
-
-def _curve_distance(model_ref, model_new, field_idx: int,
-                    n_points: int = 60) -> tuple[float, float]:
-    """
-    Distancia entre las curvas φⱼ de dos modelos, evaluadas en el rango
-    COMÚN a ambos (fuera de él la comparación no tendría sentido).
-
-    Devuelve (error relativo medio sobre las dimensiones, error máximo).
-    """
-    lo_r, hi_r = model_ref.numerical_encoder.field_range(field_idx)
-    lo_n, hi_n = model_new.numerical_encoder.field_range(field_idx)
-    lo, hi = max(lo_r, lo_n), min(hi_r, hi_n)
-    if hi <= lo:
-        return float("inf"), float("inf")
-
-    grid = torch.linspace(lo, hi, n_points).unsqueeze(1)
-    with torch.no_grad():
-        y_ref = model_ref.numerical_encoder.field_kans[field_idx](grid)
-        y_new = model_new.numerical_encoder.field_kans[field_idx](grid)
-
-    errs = []
-    for d in range(y_ref.shape[1]):
-        r = y_ref[:, d].cpu().numpy()
-        n = y_new[:, d].cpu().numpy()
-        errs.append(float(np.sqrt(np.mean((n - r) ** 2)) / (r.std() + 1e-9)))
-    return float(np.mean(errs)), float(np.max(errs))
-
-
-def _robust_z(valores: np.ndarray) -> np.ndarray:
-    """
-    Puntuación robusta de cada valor respecto a sus pares (mediana y MAD).
-
-    Se usa la mediana en vez de la media porque basta un campo derivado para
-    arrastrar la media y enmascararse a sí mismo.
-    """
-    mediana = np.median(valores)
-    mad = np.median(np.abs(valores - mediana))
-    escala = mad * 1.4826 if mad > 1e-9 else (valores.std() + 1e-9)
-    return (valores - mediana) / escala
-
-
-def symbolic_drift(model_ref, model_new, reference_formulas: dict,
-                   fit_field_fn, field_names: list[str] | None = None,
-                   z_threshold: float = 3.0) -> list[DriftSignal]:
-    """
-    Compara la forma funcional aprendida por dos modelos: el desplegado y uno
-    reajustado sobre datos recientes.
-
-    Se reportan dos cosas por campo:
-      - si el **operador dominante** cambia (señal categórica, muy visible);
-      - cuánto se **desvía la curva** respecto a la de referencia (señal
-        continua, más informativa: un cambio de operador entre dos
-        candidatos casi equivalentes no significa gran cosa, mientras que
-        una curva que se aleja sí).
-
-    Args:
-        model_ref:          modelo desplegado (referencia).
-        model_new:          modelo reajustado sobre la ventana reciente.
-        reference_formulas: {field_name: {"operator", ...}} de la extracción
-                            de referencia.
-        fit_field_fn:       función `(model, field_idx) -> dict` que ajusta
-                            la librería de operadores (se inyecta para no
-                            duplicar aquí la lógica de extracción).
-    """
-    n_fields = model_ref.numerical_encoder.num_fields
-    field_names = field_names or [f"I{j+1}" for j in range(n_fields)]
-
-    # 1. Distancia de curva por campo
-    candidatos, errores = [], []
-    for j in range(n_fields):
-        nombre = field_names[j]
-        ref = reference_formulas.get(nombre)
-        if not ref or not ref.get("operator"):
-            continue
-        nuevo = fit_field_fn(model_new, j)
-        if not nuevo or not nuevo.get("operator"):
-            continue
-        err, _ = _curve_distance(model_ref, model_new, j)
-        candidatos.append((nombre, ref, nuevo))
-        errores.append(err)
-
-    if not candidatos:
-        return []
-
-    # 2. Puntuación de cada campo CONTRA SUS PARES.
-    #
-    #    Comparar el error absoluto contra un umbral fijo no funciona: el
-    #    reajuste desplaza las curvas de todos los campos por igual, aunque
-    #    la relación no haya cambiado en ninguno, y ese suelo de ruido
-    #    depende de cuántas épocas y con qué lr se reajuste. Medido: con
-    #    reajuste suave el error de control es 0,085 y con reajuste fuerte
-    #    0,324, mientras el campo genuinamente derivado pasa de 0,153 a
-    #    0,442. En términos absolutos ambos suben; en términos relativos a
-    #    sus pares, el campo derivado destaca entre 3x y 4x en los dos casos.
-    #
-    #    Por eso la señal es la desviación robusta respecto a la mediana de
-    #    los campos: el suelo de ruido se cancela y lo que queda es «qué
-    #    variable se comporta distinto del resto», que además es la
-    #    pregunta operativamente útil.
-    errores = np.asarray(errores, dtype=float)
-    z = _robust_z(errores)
-
-    señales = []
-    for (nombre, ref, nuevo), err, zi in zip(candidatos, errores, z):
-        cambio_op = nuevo["operator"] != ref["operator"]
-        status = ("critico" if zi >= z_threshold
-                  else "aviso" if zi >= z_threshold * 0.6 or cambio_op else "ok")
-        detalle = (f"operador {ref['operator']} -> {nuevo['operator']}"
-                   if cambio_op else f"operador estable ({ref['operator']})")
-        señales.append(DriftSignal(
-            field_name=nombre,
-            signal="simbolica",
-            value=float(zi),
-            threshold=z_threshold,
-            status=status,
-            detail=f"{detalle}; error de curva {err:.3f} "
-                   f"(mediana de los campos {np.median(errores):.3f})",
-        ))
-    return señales
-
-
-# ── Informe agregado ───────────────────────────────────────────────────────
-
-def drift_report(señales: list[DriftSignal], verbose: bool = True) -> dict:
-    """Resume las señales y decide si procede recalibrar o reentrenar."""
-    import pandas as pd
-
-    df = pd.DataFrame([s.to_row() for s in señales])
-    if df.empty:
-        return {"n_signals": 0, "action": "sin datos"}
-
-    criticos = df[df.status == "critico"]
-    por_tipo = {t: grupo for t, grupo in df.groupby("signal")}
-
-    # La acción se decide por el tipo de señal que se dispara, no por el
-    # número total: cobertura y deriva simbólica piden acciones distintas.
-    if not por_tipo.get("cobertura", pd.DataFrame()).empty and \
-       (por_tipo["cobertura"].status == "critico").any():
-        accion = "RECALIBRAR: hay datos fuera del rango de la spline"
-    elif not por_tipo.get("simbolica", pd.DataFrame()).empty and \
-         (por_tipo["simbolica"].status == "critico").any():
-        accion = "REENTRENAR: la forma funcional aprendida ha cambiado"
-    elif not por_tipo.get("distribucion", pd.DataFrame()).empty and \
-         (por_tipo["distribucion"].status == "critico").any():
-        accion = "REVISAR: la distribucion de entrada se ha desplazado"
-    else:
-        accion = "sin accion"
-
-    informe = {
-        "n_signals": int(len(df)),
-        "n_criticos": int(len(criticos)),
-        "n_avisos": int((df.status == "aviso").sum()),
-        "campos_criticos": sorted(criticos.field_name.unique().tolist()),
-        "action": accion,
-        "por_senal": {t: {"max": float(g.value.max()),
-                          "criticos": int((g.status == "critico").sum())}
-                      for t, g in por_tipo.items()},
+def summarize(report: list[dict]) -> dict:
+    """Resumen de un informe: peor PSI, peor cobertura y campos en alerta."""
+    psis = [r["psi"] for r in report]
+    covs = [r["coverage"] for r in report if np.isfinite(r["coverage"])]
+    return {
+        "n_fields": len(report),
+        "max_psi": float(max(psis)) if psis else float("nan"),
+        "worst_psi_field": report[int(np.argmax(psis))]["field"] if psis else None,
+        "min_coverage": float(min(covs)) if covs else float("nan"),
+        "fields_psi_alert": [r["field"] for r in report if r["psi_level"] == "alert"],
+        "fields_psi_warning": [r["field"] for r in report if r["psi_level"] == "warning"],
+        "fields_coverage_alert": [r["field"] for r in report if r["coverage_alert"]],
     }
 
-    if verbose:
-        print(f"{'campo':>6} {'senal':>14} {'valor':>10} {'umbral':>8} {'estado':>9}")
-        print("-" * 56)
-        for _, r in df.sort_values(["signal", "value"], ascending=[True, False]).iterrows():
-            marca = {"ok": "", "aviso": "  <-", "critico": "  <<<"}[r.status]
-            print(f"{r.field_name:>6} {r.signal:>14} {r.value:>10.4f} "
-                  f"{r.threshold:>8.2f} {r.status:>9}{marca}")
-        print(f"\n  {informe['n_criticos']} criticos, {informe['n_avisos']} avisos")
-        print(f"  Accion: {accion}")
 
-    return informe
+# ── utilidades ───────────────────────────────────────────────────────────────
+
+def _as_2d(x) -> np.ndarray:
+    x = np.asarray(x, dtype=float)
+    if x.ndim == 1:
+        x = x.reshape(-1, 1)
+    if x.ndim != 2:
+        raise ValueError(f"se esperaba un array 2D, llegó ndim={x.ndim}")
+    return x
+
+
+def _inf_to_str(v: float):
+    if v == np.inf:
+        return "inf"
+    if v == -np.inf:
+        return "-inf"
+    return float(v)
+
+
+def _str_to_inf(v) -> float:
+    if v == "inf":
+        return np.inf
+    if v == "-inf":
+        return -np.inf
+    return float(v)
