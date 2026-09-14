@@ -1,0 +1,3 @@
+include LICENSE
+include SECURITY.md
+include kanrec/vendor/LICENSE-efficient-kan.txt
