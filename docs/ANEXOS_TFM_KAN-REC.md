@@ -175,15 +175,27 @@ for j in range(13):                          bases = b_splines(x)
 
 ## C.4. Entorno de ejecución
 
-| Componente | Especificación |
-|---|---|
-| Fabric — pool Spark | Small (4 vCores), capacidad de prueba |
-| Colab — GPU | NVIDIA T4 |
-| Python | 3.11 |
-| PyTorch | *(completar con la versión del entorno)* |
-| Paquete `kanrec` | 0.3.2 |
+El proyecto se ejecuta en tres entornos con papeles distintos, y sus versiones difieren. Se documentan los tres porque las cifras de las secciones 7.1 a 7.3 proceden de Colab, mientras que la ingesta y la orquestación corren en Fabric.
 
-> Las versiones exactas de las librerías se obtienen con `pip freeze` en el entorno de ejecución y se recogen en `requirements.lock` del repositorio.
+| Componente | Fabric (ingesta y pipeline) | Colab (resultados) | Local (desarrollo) |
+|---|---|---|---|
+| Python | 3.11.8 | 3.13.15 | 3.11 |
+| PyTorch | 2.2.1 | 2.11.0+cu128 | 2.2.2 |
+| NumPy | 1.26.4 | 2.1.3 | 1.26.4 |
+| SciPy | 1.11.4 | 1.16.3 | 1.17.1 |
+| scikit-learn | 1.2.2 | 1.6.1 | 1.9.0 |
+| pandas | 2.1.4 | 2.2.3 | 3.0.5 |
+| GPU | — | NVIDIA Tesla T4 | — |
+| Cómputo | Pool Small (4 vCores) | Colab Pro | — |
+| Paquete `kanrec` | 0.3.2 | 0.3.2 | 0.3.2 |
+
+Dos observaciones que condicionaron el diseño del paquete:
+
+**Los mínimos de versión declarados deben ser compatibles con el runtime más antiguo.** La versión inicial de `setup.py` exigía `scipy>=1.12.0`, `scikit-learn>=1.4.0` y `pandas>=2.2.0`, todos superiores a los del runtime de Fabric (1.11.4, 1.2.2 y 2.1.4 respectivamente). Al publicar el paquete en un entorno de Fabric, pip actualizó esas librerías sobre las preinstaladas y dejó una instalación mixta —los binarios compilados de una versión y los ficheros Python de otra— que inutilizó el entorno con `ImportError: cannot import name '_promote' from scipy.spatial.transform._rotation`. Los mínimos se relajaron a lo que el código realmente usa, y una prueba automática compara los valores declarados con los del runtime y falla si alguno los supera.
+
+**El techo `pandas<3.0.0` responde a una restricción de plataforma, no del código.** Las herramientas propias de Fabric exigen `pandas<3.0.0`; el código del proyecto funciona con pandas 3.x, como demuestra el entorno local de desarrollo.
+
+> Las versiones completas del entorno local se recogen en `requirements.lock` del repositorio, generado con `pip freeze`.
 
 ## C.5. Reproducción de los experimentos
 
@@ -297,6 +309,28 @@ Los máximos de 700 desviaciones típicas en I6 e I12 son los que motivan el win
 
 Equivalencia entre original y vectorizado: diferencia máxima **0,00** en la medición sobre GPU y **2,4·10⁻⁷** en CPU, en ambos casos dentro de la precisión de float32.
 
+## D.7. Ejecución completa del pipeline de orquestación
+
+Ejecución del pipeline `kanrec_end_to_end` (14 de septiembre de 2026), con las
+seis actividades completadas correctamente:
+
+| Actividad | Inicio | Duración |
+|---|---|---|
+| Ingesta Spark (`01`) | 14:44:58 | 17 min 30 s |
+| API REST (`03`) | 15:02:31 | 25 s |
+| Streaming (`06`) | 15:02:31 | 2 min 10 s |
+| Comparativa de modelos (`04`) | 15:04:50 | 10 min 42 s |
+| Extracción simbólica (`05`) | 15:15:37 | 1 min 53 s |
+| Persistencia en MongoDB (`09`) | 15:17:33 | 1 min 56 s |
+| **Total extremo a extremo** | | **34 min 31 s** |
+
+Dos observaciones sobre estos tiempos. La ingesta concentra el 51 % del total,
+coherente con procesar diez millones de filas e indexar veintiséis variables
+categóricas, una de ellas con más de cuatrocientas mil categorías distintas. Y
+las actividades de enriquecimiento y streaming comparten hora de inicio
+(15:02:31), lo que confirma que las ramas paralelas del grafo se ejecutan
+efectivamente en simultáneo una vez liberada la contención de capacidad descrita
+en 7.4.
 ---
 
 # Anexo E. Revisión de literatura
