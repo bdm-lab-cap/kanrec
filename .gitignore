@@ -40,3 +40,6 @@ kaggle.json
 .backup_paso*/
 =*
 *.whl
+
+# Paquetes de cambios descomprimidos temporalmente
+kanrec_v0.4.0_cambios/
