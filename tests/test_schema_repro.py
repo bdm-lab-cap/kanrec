@@ -102,14 +102,17 @@ class TestDependenciasCompatiblesConFabric:
     scikit-learn, pandas y pyarrow.
     """
 
-    #: Versiones de referencia del runtime de Fabric (Spark 3.5 / Python 3.11).
-    #: Declarar un minimo por encima de estas provoca una actualizacion.
+    #: Versiones MEDIDAS en el runtime de Fabric (Python 3.11.8), no estimadas.
+    #: Declarar un minimo por encima de estas provoca que pip las actualice y
+    #: deje la instalacion mixta. Tres de los cuatro minimos originales lo
+    #: hacian: scipy>=1.12.0 sobre 1.11.4 (el que rompio el entorno),
+    #: scikit-learn>=1.4.0 sobre 1.2.2 y pandas>=2.2.0 sobre 2.1.4.
     RUNTIME_FABRIC = {
-        "torch": (2, 0),
-        "scipy": (1, 11),
-        "scikit-learn": (1, 3),
-        "pandas": (2, 0),
-        "pyarrow": (14, 0),
+        "torch": (2, 2),          # 2.2.1
+        "scipy": (1, 11),         # 1.11.4
+        "scikit-learn": (1, 2),   # 1.2.2
+        "pandas": (2, 1),         # 2.1.4
+        "pyarrow": (14, 0),       # no medido; valor conservador
     }
 
     def _minimos_declarados(self) -> dict:
