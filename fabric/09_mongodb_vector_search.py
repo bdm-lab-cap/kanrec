@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 from pymongo.mongo_client import MongoClient
-from efficient_kan import KAN
+from kanrec.vendor.efficient_kan import KAN   # vendorizado en el paquete
 
 # La URI de Atlas se lee de Azure Key Vault (Fabric) o de una variable de entorno.
 # Nunca se escribe una credencial en el notebook.
@@ -58,7 +58,39 @@ except ImportError:                                # fallback si el wheel aun no
             )
         return uri
 
-ATLAS_URI  = atlas_uri()
+def _resolver_atlas_uri() -> str:
+    """
+    Resuelve la cadena de conexion a Atlas SIN escribirla en el notebook.
+
+    En ejecucion por pipeline no sirve `%env`, asi que el orden es:
+      1. parametro del pipeline `atlas_uri`
+      2. kanrec.config (Key Vault o variable de entorno)
+      3. Files/config/atlas_config.json  ->  {"atlas_uri": "mongodb+srv://..."}
+
+    NUNCA pegar la URI aqui: contiene la contrasena en claro y queda en el
+    historial de ejecucion, en el notebook y en el repositorio.
+    """
+    if "atlas_uri_param" in globals() and globals()["atlas_uri_param"]:
+        return str(globals()["atlas_uri_param"])
+    try:
+        return atlas_uri()
+    except Exception:
+        pass
+    try:
+        with open("/lakehouse/default/Files/config/atlas_config.json") as f:
+            uri = json.load(f).get("atlas_uri", "")
+        if uri:
+            return uri
+    except Exception:
+        pass
+    raise RuntimeError(
+        "No se pudo resolver la conexion a Atlas. Crea "
+        "Files/config/atlas_config.json con {\"atlas_uri\": \"mongodb+srv://...\"} "
+        "o pasa 'atlas_uri_param' como parametro de la actividad del pipeline."
+    )
+
+
+ATLAS_URI  = _resolver_atlas_uri()
 CKPT_PATH  = "/lakehouse/default/Files/checkpoints/best_kan-bspline_criteo_s42.pt"
 NUMERICAL_COLS   = [f"I{i}" for i in range(1, 14)]
 CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]

@@ -1,0 +1,4 @@
+{
+  "atlas_uri": "mongodb+srv://USUARIO:CONTRASENA_NUEVA@clusterkanrec.wnwt3ze.mongodb.net/?appName=ClusterKanrec",
+  "_nota": "Plantilla. Sustituir por la credencial ROTADA. Este fichero vive en Files/config/ del lakehouse, NO en el repositorio."
+}
