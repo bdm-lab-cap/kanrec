@@ -5,7 +5,7 @@ into closed-form scoring rules.
 Steps:
   1. Prune edges by L1 norm (+ optional ShapKAN importance)
   2. Fit each surviving curve to an operator from the library
-  3. Persist results to MongoDB via MongoSymbolicStore
+  3. Persistencia opcional en MongoDB (solo si se pasa mongo_uri)
 """
 from collections import Counter
 
@@ -13,7 +13,6 @@ import numpy as np
 from typing import Callable, Optional
 from scipy.optimize import curve_fit
 
-from .mongo_store import MongoSymbolicStore
 
 # Operator library: each function takes (x, a, b)
 OPERATOR_LIBRARY: dict[str, Callable] = {
@@ -55,13 +54,42 @@ class SymbolicExtractor:
         model,
         r2_threshold: float = 0.95,
         l1_percentile: float = 20,
-        mongo_uri: str = "mongodb://localhost:27017",
+        mongo_uri: Optional[str] = None,
     ):
+        """
+        Args:
+            mongo_uri: si se indica, los resultados pueden persistirse en
+                Atlas con `save_to_mongo()`. Por defecto es None y **no se
+                importa pymongo ni se abre conexion alguna**.
+
+        La persistencia era antes obligatoria: el constructor creaba un
+        MongoSymbolicStore contra localhost, y el import de este modulo
+        arrastraba pymongo. Eso hacia que la extraccion simbolica fallase
+        con ModuleNotFoundError en entornos sin pymongo -- por ejemplo
+        Microsoft Fabric, donde no viene preinstalado-- pese a que extraer
+        formulas no necesita base de datos alguna. Persistir es una
+        responsabilidad separada, y ahora es opcional.
+        """
         self.model         = model
         self.r2_threshold  = r2_threshold
         self.l1_percentile = l1_percentile
-        self.store         = MongoSymbolicStore(uri=mongo_uri)
+        self.mongo_uri     = mongo_uri
+        self._store        = None
         self.results: dict[int, dict] = {}
+
+    @property
+    def store(self):
+        """Store de MongoDB, creado solo si se pidio al construir el extractor."""
+        if self.mongo_uri is None:
+            raise RuntimeError(
+                "Este SymbolicExtractor se creo sin mongo_uri, asi que no "
+                "tiene persistencia. Pasa mongo_uri=... si quieres guardar "
+                "los resultados en Atlas."
+            )
+        if self._store is None:
+            from .mongo_store import MongoSymbolicStore   # import diferido
+            self._store = MongoSymbolicStore(uri=self.mongo_uri)
+        return self._store
 
     # ── Pruning ───────────────────────────────────────────────────────────────
 
@@ -275,4 +303,6 @@ class SymbolicExtractor:
         return formula
 
     def close(self):
-        self.store.close()
+        """Cierra la conexion a Mongo si llego a abrirse; si no, no hace nada."""
+        if self._store is not None:
+            self._store.close()

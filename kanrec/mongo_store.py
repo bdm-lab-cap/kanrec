@@ -12,10 +12,39 @@ Schema:
 from datetime import datetime, timezone
 from typing import Optional
 
-from pymongo import MongoClient, ASCENDING, DESCENDING
-from pymongo.collection import Collection
+# pymongo NO viene preinstalado en el runtime de Microsoft Fabric, a
+# diferencia de torch, scipy o pandas. Cuando el paquete se distribuye como
+# codigo en Files/libs (via sys.path) en lugar de instalarse, sus
+# dependencias no se resuelven, y un `ModuleNotFoundError: No module named
+# 'pymongo'` seco no dice al usuario que hacer. El import se difiere y se
+# acompana de instrucciones.
+try:
+    from pymongo import ASCENDING, DESCENDING, MongoClient
+    from pymongo.collection import Collection
+
+    PYMONGO_DISPONIBLE = True
+except ModuleNotFoundError:  # pragma: no cover - depende del entorno
+    PYMONGO_DISPONIBLE = False
+    ASCENDING, DESCENDING = 1, -1
+    MongoClient = Collection = None
+
+    _AYUDA = (
+        "pymongo no esta disponible en este entorno.\n\n"
+        "En Microsoft Fabric no viene preinstalado. Dos opciones:\n"
+        "  1) Subir pymongo y bson a Files/libs/ junto a kanrec/:\n"
+        "       pip download pymongo --no-deps --only-binary=:all: \\\n"
+        "           --python-version 3.11 --platform manylinux2014_x86_64 -d ./pm\n"
+        "     y descomprimir el wheel en esa carpeta.\n"
+        "  2) Instalarlo en el entorno del workspace (mas lento de publicar).\n\n"
+        "El resto del paquete no lo necesita: solo la persistencia en Atlas."
+    )
 
 from .schema import NATURAL_KEY, SymbolicResult
+
+
+def _exigir_pymongo() -> None:
+    if not PYMONGO_DISPONIBLE:
+        raise ModuleNotFoundError(_AYUDA)
 
 
 class MongoSymbolicStore:
@@ -32,6 +61,7 @@ class MongoSymbolicStore:
         db_name: str = "kanrec",
         collection: str = "symbolic_results",
     ):
+        _exigir_pymongo()
         self.client = MongoClient(uri)
         self.db     = self.client[db_name]
         self.col: Collection = self.db[collection]

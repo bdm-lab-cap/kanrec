@@ -42,8 +42,9 @@ def _make_mock_extractor():
     mock_model.numerical_encoder.get_spline_curves.return_value = (x_grid, y_log)
     mock_model.numerical_encoder.get_edge_norms.return_value = [1.0, 0.5, 0.8, 0.2, 0.9]
 
-    with patch("kanrec.symbolic.MongoSymbolicStore"):
-        extractor = SymbolicExtractor(mock_model, r2_threshold=0.90, l1_percentile=20)
+    # Ya no hace falta parchear MongoSymbolicStore: el extractor no abre
+    # conexion salvo que se le pase mongo_uri explicitamente.
+    extractor = SymbolicExtractor(mock_model, r2_threshold=0.90, l1_percentile=20)
     return extractor, mock_model
 
 
@@ -67,3 +68,65 @@ def test_fit_field_formula_string_format():
     result = extractor.fit_field(0)
     assert "log" in result["formula"]
     assert "|x|" in result["formula"] or "log" in result["formula"]
+
+
+class TestSymbolicSinMongo:
+    """
+    La extraccion simbolica no debe depender de MongoDB.
+
+    symbolic.py importaba mongo_store a nivel de modulo y el constructor
+    creaba un MongoSymbolicStore contra localhost, asi que en un entorno sin
+    pymongo -- Microsoft Fabric, donde no viene preinstalado -- la cadena
+    `from kanrec.ablation import substitution_ablation` fallaba con
+    ModuleNotFoundError antes de ejecutar nada. Persistir es una
+    responsabilidad separada de extraer.
+    """
+
+    def test_no_se_importa_mongo_store_al_cargar_el_modulo(self):
+        import kanrec.symbolic as mod
+
+        fuente = open(mod.__file__).read()
+        nivel_modulo = fuente.split("class SymbolicExtractor")[0]
+        assert "from .mongo_store import" not in nivel_modulo, (
+            "symbolic.py vuelve a importar mongo_store a nivel de modulo"
+        )
+
+    def test_extractor_se_construye_sin_uri(self):
+        import torch
+
+        from kanrec.model import KANRecModel
+        from kanrec.symbolic import SymbolicExtractor
+
+        model = KANRecModel(num_numerical=3, cat_cardinalities=[5, 5], embedding_dim=8)
+        model.calibrate(torch.randn(200, 3))
+
+        extractor = SymbolicExtractor(model)          # sin mongo_uri
+        assert extractor.mongo_uri is None
+        assert extractor._store is None               # no se abrio conexion
+
+        resultado = extractor.fit_field(0, n_grid=64)
+        assert resultado["operator"] is not None
+        assert "operator_agreement" in resultado
+
+    def test_acceder_al_store_sin_uri_explica_el_motivo(self):
+        import torch
+
+        from kanrec.model import KANRecModel
+        from kanrec.symbolic import SymbolicExtractor
+
+        model = KANRecModel(num_numerical=2, cat_cardinalities=[5], embedding_dim=4)
+        model.calibrate(torch.randn(100, 2))
+        extractor = SymbolicExtractor(model)
+
+        with pytest.raises(RuntimeError, match="mongo_uri"):
+            _ = extractor.store
+
+    def test_close_sin_conexion_no_rompe(self):
+        import torch
+
+        from kanrec.model import KANRecModel
+        from kanrec.symbolic import SymbolicExtractor
+
+        model = KANRecModel(num_numerical=2, cat_cardinalities=[5], embedding_dim=4)
+        model.calibrate(torch.randn(100, 2))
+        SymbolicExtractor(model).close()      # no debe lanzar
