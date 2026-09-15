@@ -1,6 +1,6 @@
 # KAN-REC
 
-**Codificación continua de variables numéricas y extracción simbólica para sistemas de recomendación**
+**Codificación de variables numéricas continuas y extracción de puntuación simbólica para sistemas de recomendación**
 
 > TFM · Máster en Big Data & Data Engineering · Universidad Complutense de Madrid
 > Autor: Pedro Antonio Martínez Sánchez
@@ -14,30 +14,46 @@
 
 ---
 
-## Qué es
+## Qué es KAN-REC
 
-KAN-REC sustituye la discretización de **AutoDis** (KDD 2021) por un encoder basado en
-**Kolmogorov-Arnold Networks**: cada variable numérica se mapea a su embedding mediante
-una spline B-spline aprendible, sin cubos ni discontinuidades. Tras el entrenamiento, las
-curvas se ajustan a operadores elementales, produciendo una descripción cerrada y
-auditable de cómo el modelo transforma cada variable:
+KAN-REC sustituye la discretización de **AutoDis** (Guo et al., KDD 2021) por un
+**encoder basado en Kolmogorov-Arnold Networks**: cada variable numérica se
+transforma en un embedding mediante una B-spline aprendida, sin cubos y sin
+discontinuidades en los límites.
+
+Su aportación no es predictiva sino **descriptiva**. Tras el entrenamiento, la
+curva aprendida de cada campo se ajusta a una librería de operadores
+elementales, produciendo una fórmula cerrada por variable que puede auditarse
+sin abrir el modelo:
 
 ```
-phi_I3(x)  ~ -0,7210*x + 0,0319     R2 = 0,9973 +- 0,0018   acuerdo 100 % de 16 dims
-phi_I11(x) ~  0,7315*x + 0,5387     R2 = 0,9965 +- 0,0043   acuerdo 100 % de 16 dims
+φⱼ(x) ≈ aⱼ·op(x) + bⱼ        op ∈ {x, log(x+1), exp(x), x², √x, 1/x, sigmoid(x)}
 ```
 
-Todo el trabajo se sustenta sobre una arquitectura de datos completa en Microsoft Fabric:
-ingesta distribuida con Spark de 10 M de impresiones, streaming desde Confluent Cloud,
-enriquecimiento vía API REST, lakehouse en Delta, orquestación con Data Factory,
-persistencia en MongoDB Atlas y explotación en Power BI.
+El operador ganador, sus coeficientes, el R² del ajuste y el grado de acuerdo
+entre las dieciséis dimensiones del embedding se calculan en
+`05_symbolic_extraction`, se persisten en MongoDB Atlas y se consultan en la
+página de fórmulas del informe de Power BI.
+
+Esa descripción se persiste en MongoDB Atlas, se explota en Power BI y —desde la
+versión 0.4.0— se **vigila en producción**: el rango calibrado de cada spline
+define dónde la fórmula sigue siendo válida, y el sistema alerta cuando el
+tráfico se sale de él.
+
+**Contexto regulatorio.** Las obligaciones de transparencia sobre sistemas de
+recomendación (Art. 27 del DSA, y el AI Act para los usos que caen bajo su
+ámbito) exigen explicar los parámetros principales que determinan lo que se
+muestra a cada usuario. Un modelo que produce una descripción funcional cerrada
+de cada variable responde a ese requisito por construcción, no mediante
+explicaciones post-hoc.
 
 ---
 
 ## Resultados
 
-Comparativa sobre **1,5 M de impresiones** de Criteo, 3 semillas, backbone idéntico
-(el encoder numérico es la única variable):
+### Capacidad predictiva — paridad, no superioridad
+
+Criteo, 1,5 M de filas, tres semillas, backbone idéntico para los tres encoders:
 
 | Encoder | Test AUC | Log-loss | Entrenamiento |
 |---|---|---|---|
@@ -45,171 +61,230 @@ Comparativa sobre **1,5 M de impresiones** de Criteo, 3 semillas, backbone idén
 | AutoDis (KDD 2021) | 0,7816 ± 0,0012 | 0,4651 ± 0,0029 | 195 s |
 | **KAN-REC** | **0,7851 ± 0,0015** | **0,4624 ± 0,0020** | 258 s |
 
-**Lectura honesta.** La diferencia frente a la normalización directa (0,0010) es del mismo
-orden que la desviación entre semillas, y la normalización gana en una de las tres: **hay
-paridad, no superioridad**. Frente a AutoDis la diferencia sí es consistente (0,0035,
-unas 2,3 desviaciones, ganando en las tres semillas).
+La diferencia frente a la normalización directa (0,0010) es **del mismo orden
+que la desviación entre semillas**, por lo que no es estadísticamente
+significativa: hay **paridad**. La normalización directa gana en una de las tres
+semillas, lo que lo confirma. Frente a AutoDis la diferencia sí es consistente
+(0,0035, unas 2,3 desviaciones, ganando en las tres semillas).
 
-### Interpretabilidad
+Una versión anterior de este README publicaba un AUC de 0,897. Ese resultado era
+inválido: el muestreo usaba `.limit()` de Spark, que devuelve las primeras filas
+en orden de fichero en lugar de una muestra aleatoria, de modo que positivos y
+negativos provenían de ventanas temporales distintas y cualquier variable
+correlacionada con la posición delataba la etiqueta. Se detectó en una auditoría
+interna y se corrigió; la memoria documenta el episodio completo.
 
-- **Extracción simbólica:** operador `linear` en los 10 campos retenidos, R² medio
-  0,919–0,998, con acuerdo del 88 %–100 % entre las 16 dimensiones del embedding.
-- **Fidelidad:** sustituir phi_j por su fórmula dentro del modelo reproduce la forma con un
-  error relativo de 0,066 ± 0,003.
-- **Estabilidad:** el mismo operador en 8 de 11 campos sobre 3 semillas (90,9 %).
-- **Monotonía:** 11 de 13 campos monótonos (violación media 2,84 %), propiedad emergente
-  y verificable, no impuesta.
-- **Validación del método:** sobre señales sintéticas de forma conocida, el encoder
-  produce curvas cuando las hay (R² lineal 0,601 con `sin(1,5x)`) y rectas cuando no
-  (0,937 con señal lineal). La linealidad detectada en Criteo es una propiedad del
-  dataset, no una limitación del extractor.
+### Interpretabilidad — fórmulas auditadas y verificadas
 
-### Optimización de la inferencia
+La extracción converge al operador **lineal** en los diez campos retenidos, con
+R² entre 0,919 y 0,998 y acuerdo del 88 % al 100 % entre las dieciséis
+dimensiones del embedding. Estabilidad entre semillas: 90,9 %.
 
-El perfilado mostró que el encoder consumía el **84,5 %** del tiempo de inferencia, por
-recorrer los 13 campos en un bucle de Python (13 lanzamientos de kernel por lote).
-Vectorizado en una sola operación `bmm`:
+Que todo salga lineal no es una limitación del método. Entrenando el mismo
+modelo sobre señales de forma conocida, el encoder recupera la curva sinusoidal
+cuando la señal es sinusoidal y la recta cuando es lineal: la linealidad es un
+hallazgo sobre Criteo. La fidelidad se verificó sustituyendo la fórmula dentro
+del propio modelo, que reproduce la forma con un 6 % de error.
 
-| Configuración (lote 4096, T4) | Modelo | Encoder | Filas/s |
+### Coste de la interpretabilidad
+
+El perfilado mostró que el encoder consumía el 84,5 % del tiempo de inferencia,
+no por el coste de evaluar las splines sino porque el forward recorría los trece
+campos en un bucle de Python. Vectorizado en una única operación matricial:
+
+| | Original | Vectorizado | Mejora |
 |---|---|---|---|
-| Normalización directa | 2,58 ms | 0,71 ms | 1.589.091 |
-| AutoDis | 4,44 ms | 3,61 ms | 923.550 |
-| KAN-REC original | 10,45 ms | 8,83 ms | 391.862 |
-| **KAN-REC vectorizado** | **2,68 ms** | **0,95 ms** | **1.525.526** |
+| Encoder numérico | 8,83 ms | 0,95 ms | 9,27× |
+| Modelo completo | 10,45 ms | 2,68 ms | 3,89× |
+| Tiempo en el encoder | 84,5 % | 35,5 % | — |
 
-El encoder acelera **9,27 veces** y el modelo completo **3,89 veces**. La salida es idéntica
-hasta la precisión de float32 (diferencia máxima medida: 0,00 en GPU y 2,4e-7 en CPU), por
-lo que todos los resultados anteriores siguen siendo válidos. El modelo vectorizado queda
-**prácticamente a la par de la normalización directa** (2,68 frente a 2,58 ms) y 1,66 veces
-por delante de AutoDis.
-
----
-
-## Nota sobre el método
-
-Los primeros resultados de este proyecto daban un AUC de 0,90, muy por encima del estado
-del arte publicado en Criteo (0,80–0,815). Una revisión crítica en la semana 6 reveló que
-el muestreo usaba `.limit()` de Spark, que no es aleatorio: devolvía las primeras filas en
-orden de fichero, de modo que positivos y negativos procedían de ventanas temporales
-distintas. Con muestreo aleatorio real el AUC bajó a 0,78.
-
-Esa revisión destapó cuatro problemas más, entre ellos una baseline de AutoDis mal
-implementada cuyo log-loss era peor que el de un predictor constante. Todos están
-documentados en la sección 7.4 de la memoria, junto con las limitaciones vigentes.
+`kanrec.vectorized` copia los pesos del encoder entrenado, de modo que la
+optimización cambia la velocidad y nunca el modelo. La equivalencia se verifica
+en los tests unitarios y se mide sobre el checkpoint real con
+`experiments/latency_report.py`, que compara ambas baselines vectorizadas para
+que el sobrecoste reportado sea el del método y no el del bucle.
 
 ---
 
 ## Arquitectura
 
 ```
-FUENTES                   INGESTA / PROCESO           ALMACENAMIENTO      EXPLOTACION
-
-Criteo TSV (2,26 GB)  -->  01 Spark ingest       -->  Delta / OneLake --> Power BI
-10.000.001 filas           log1p, StandardScaler      train/val/test      (Direct Lake)
-                           indexado categorico
-                                   |
-Confluent Cloud       -->  Eventstream           -->  streaming_kfk   --> Real-Time
-(Kafka)                    06 Stream processing        + KQL DB            Dashboard
-                           (mismos estadisticos)
-                                   |
-Mock API REST         -->  03 API ingest         -->  train_enriched
-                                   |
-                                   v
-                           04 Comparativa             05 Extraccion   --> MongoDB Atlas
-                           raw | AutoDis | KAN            simbolica        symbolic_results
-                           3 semillas, MLflow          + fidelidad
+┌───────────────────────────────────────────────────────────────────────┐
+│  FUENTES                                                              │
+│  Criteo TSV (10 M) · Confluent Cloud (Kafka) · API REST de metadatos  │
+└─────────┬──────────────────┬───────────────────┬─────────────────────┘
+          ▼                  ▼                   ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│  MICROSOFT FABRIC — workspace KAN-REC                                 │
+│                                                                       │
+│  01_spark_ingest_mlllib   normalización distribuida → train/val/test  │
+│                           + scaler_stats.json + cat_index_maps        │
+│  03_api_ingest            enriquecimiento REST → item_metadata        │
+│  04_model_comparison      raw vs AutoDis vs KAN, 3 semillas           │
+│                           → checkpoints + manifiestos firmados        │
+│  05_symbolic_extraction   fórmulas por campo → symbolic_results       │
+│  06_stream_processing     Structured Streaming incremental:           │
+│                             normaliza (misma función que 01)          │
+│                             → puntúa con el checkpoint verificado     │
+│                             → deriva por campo (PSI + cobertura)      │
+│  09_mongodb_vector_search embeddings KAN → Atlas $vectorSearch        │
+│                                                                       │
+│  Eventstream · Lakehouse sobre OneLake · Data Pipelines               │
+│  Power BI (Direct Lake, 4 páginas) · Activator (alertas)              │
+└─────────┬─────────────────────────────────────────────────────────────┘
+          ▼
+┌──────────────────────────┐   ┌──────────────────────────────────────┐
+│  Google Colab (GPU T4)   │   │  MongoDB Atlas                       │
+│  comparativa a 1,5 M     │   │  symbolic_results · item_embeddings  │
+└──────────────────────────┘   └──────────────────────────────────────┘
 ```
 
-Orquestado con un pipeline de Data Factory cuyas dependencias son las reales de datos.
-Detalles en [`fabric/PIPELINE_README.md`](fabric/PIPELINE_README.md).
+**Consistencia batch/stream.** El entrenamiento y el servicio aplican
+literalmente la misma función de normalización
+(`kanrec.spark_utils.normalise_like_train`) con los mismos estadísticos y los
+mismos mapas de indexado. No es una convención: cada checkpoint lleva un
+manifiesto con el hash SHA-256 de `scaler_stats.json`, y el notebook de
+streaming **aborta** si intenta servir con estadísticos distintos de los del
+entrenamiento.
 
 ---
 
-## Instalación y uso
+## El modelo en servicio
+
+Desde la v0.4.0 el circuito se cierra: el modelo no solo se entrena, se sirve y
+se vigila.
+
+```python
+from kanrec.serving import load_model, check_manifest, score_spark
+
+check_manifest(ckpt, scaler_stats_path=stats, numerical_cols=cols)  # o aborta
+scored = score_spark(df, ckpt, numerical_cols, idx_cols, output_col="p_click")
+```
+
+`load_model` deduce el encoder y todos sus hiperparámetros de las formas del
+`state_dict`, así que un checkpoint es autocontenido: no hace falta reconstruir
+el contexto de entrenamiento para cargarlo.
+
+**Detección de deriva** (`kanrec.drift`), por lote y por campo:
+
+- **Cobertura del rango calibrado** — fracción del lote que cae dentro de los
+  nudos de φⱼ. Fuera de ese rango la spline es nula y φⱼ degenera en su ruta
+  base: el modelo responde, pero ya no con la curva auditada ni con la fórmula
+  publicada. Es una señal que **solo existe porque el encoder es interpretable**;
+  una capa densa no tiene rango válido que vigilar.
+- **PSI por campo** frente a la distribución de entrenamiento, con los umbrales
+  habituales de scoring (0,10 vigilar, 0,25 alerta).
+
+---
+
+## Cobertura de asignaturas
+
+| Componente | Tecnología | Asignatura |
+|---|---|---|
+| Encoder KAN + extracción simbólica | PyTorch + EfficientKAN | Deep Learning |
+| Normalización distribuida | Spark en Fabric | Spark |
+| Stream de clics en tiempo real | Confluent Cloud + Eventstream | Kafka |
+| Feature store | OneLake + Delta Lake | Diseño de ingesta |
+| Arquitectura multi-fuente | Microsoft Fabric | Arquitecturas de datos |
+| Orquestación cloud | Fabric Data Pipelines | Pipelines cloud |
+| Store simbólico + Vector Search | MongoDB Atlas | NoSQL |
+| Modelado de tablas Delta | Esquemas Delta | Modelado de datos |
+| Seguimiento de experimentos | Fabric ML Experiments | Machine Learning |
+| CI/CD + empaquetado | GitHub Actions + wheel | Productivización |
+| Cuadro de mando y tiempo real | Power BI Direct Lake | — |
+| Contenedores + DevOps | Docker + GitHub Actions | Contenedores |
+
+---
+
+## Puesta en marcha local
 
 ```bash
 git clone https://github.com/bdm-lab-cap/kanrec.git && cd kanrec
+
+# Credenciales: nunca en el código. Ver SECURITY.md
+cp .env.example .env          # ATLAS_URI, CONFLUENT_API_KEY, CONFLUENT_API_SECRET
+
 python -m venv .venv && source .venv/bin/activate
-
-# efficient-kan esta vendorizado (kanrec/vendor/) porque no se publica en PyPI
-pip install -e ".[dev,train]"
-
-pytest tests/ -q                       # 107 tests
+pip install -e ".[dev,train,streaming,api]"
 ```
 
-El extra `[train]` añade mlflow, necesario solo para entrenar en local o Colab.
-**No instalarlo dentro de un notebook de Fabric:** sobreescribe el mlflow del runtime y
-rompe el plugin `synapse.ml.mlflow`.
+`efficient-kan` está vendorizado en `kanrec/vendor/` porque no se publica en
+PyPI; no hace falta instalarlo aparte.
 
-### Reproducir los experimentos
+> **En notebooks de Fabric, instalar `kanrec` sin extras.** El extra `[train]`
+> arrastra mlflow desde PyPI y rompe el mlflow propio de Fabric, integrado con
+> su plugin `synapse.ml.mlflow`.
 
 ```bash
-bash experiments/run_all.sh                                  # 3 encoders x 3 semillas
-python experiments/symbolic_extraction.py                    # extraccion y fidelidad
-PYTHONPATH=. python experiments/figura_validacion_simbolica.py
+pytest tests/ -v                                        # suite completa
+python infra/kafka_producer_confluent.py --max-rows 500 # productor a Confluent
 ```
 
-El dataset no se incluye por tamaño; se descarga con `data/download_criteo.sh`.
+### Artefacto
 
-### Uso del paquete
+Cada etiqueta `v*` publica una wheel construida por CI, validada con `twine` e
+instalada en un entorno limpio fuera del árbol de fuentes antes de publicarse.
+Es la misma que se sube al entorno de Microsoft Fabric.
 
-```python
-import torch
-from kanrec.baselines import build_model
-from kanrec.symbolic import SymbolicExtractor
-from kanrec.vectorized import vectorize_model
+### Microsoft Fabric
 
-model = build_model("kan-bspline", num_numerical=13,
-                    cat_cardinalities=[...], embedding_dim=16, kan_grid_size=10)
-model.calibrate(x_num_sample)          # adapta el grid a la distribucion real
-
-# ... entrenamiento con BCEWithLogitsLoss y model.parameter_groups() ...
-
-resultados = SymbolicExtractor(model).fit_all()   # ajuste sobre las 16 dimensiones
-rapido = vectorize_model(model)                   # inferencia 3,89 veces mas rapida
-```
+1. Workspace `KAN-REC` y lakehouse `kanrec_lakehouse`
+2. Subir `criteo_10m.tsv` a `Files/raw/`
+3. Publicar la wheel como entorno **del workspace** (no solo del notebook:
+   `score_spark` usa `mapInPandas` y necesita el paquete en los ejecutores)
+4. Ejecutar `01 → 03 → 04 → 05 → 06 → 09`, o el pipeline completo
+   (`fabric/pipeline_kanrec_end_to_end.json`)
 
 ---
 
 ## Estructura
 
 ```
-kanrec/                  Paquete instalable
-  encoder.py             Encoder KAN (calibracion del grid, winsorizado)
-  model.py               Backbone compartido y grupos de parametros
-  baselines.py           raw, AutoDis y KAN-REC desde una unica factoria
-  symbolic.py            Extraccion simbolica sobre las 16 dimensiones
-  ablation.py            Fidelidad por sustitucion
-  vectorized.py          Encoder vectorizado (equivalencia verificada)
-  latency.py             Medicion de latencia de inferencia
-  drift.py               Deteccion de deriva (cobertura y PSI)
-  faithfulness.py        Auditoria de monotonia
-  schema.py              Esquema unico de los documentos de MongoDB
-  spark_utils.py         Utilidades de Spark (muestreo aleatorio real)
-  config.py              Secretos: Key Vault, entorno, .env
-  vendor/                efficient-kan vendorizado (licencia MIT)
-
-fabric/                  Notebooks de Microsoft Fabric (01, 03-07, 09, 10)
-colab/                   Comparativa completa y analisis de cierre
-experiments/             Scripts reproducibles
-tests/                   107 tests, cada uno ligado a un fallo concreto
-powerbi/                 Documentacion del panel
-docs/                    Memoria, anexos y guion del video
+kanrec/
+├── .github/workflows/ci.yml        # escaneo de secretos · tests · wheel
+├── kanrec/                         # paquete instalable
+│   ├── encoder.py                  # KANNumericalEncoder (B-splines por campo)
+│   ├── vectorized.py               # versiones vectorizadas (KAN y raw)
+│   ├── model.py                    # backbone compartido
+│   ├── baselines.py                # raw · AutoDis
+│   ├── symbolic.py                 # SymbolicExtractor
+│   ├── faithfulness.py             # verificación de fidelidad
+│   ├── serving.py                  # carga, manifiesto y scoring en Spark
+│   ├── drift.py                    # PSI + cobertura del rango calibrado
+│   ├── spark_utils.py              # normalización compartida batch/stream
+│   └── vendor/efficient_kan.py     # vendorizado (MIT)
+├── fabric/                         # notebooks de Microsoft Fabric
+├── experiments/                    # entrenamiento local e informe de latencia
+├── infra/                          # Docker, productores Kafka
+├── powerbi/                        # modelo semántico, DAX y reglas de alerta
+├── tests/
+├── setup.py · MANIFEST.in · SECURITY.md
 ```
 
 ---
 
-## Seguridad
+## Calidad
 
-Los secretos se resuelven por `kanrec.config` (Azure Key Vault, variables de entorno,
-`.env`), nunca en el código. La CI ejecuta `gitleaks` sobre el historial completo antes de
-los tests, y un test de regresión falla si aparece una credencial en el repositorio.
-El proyecto sufrió una fuga real de credenciales; su remediación completa está documentada
-en [`SECURITY.md`](SECURITY.md).
+- Suite de tests con pytest sobre Python 3.11 y un servicio MongoDB real, con
+  informe de cobertura. Cada test de regresión está escrito para **fallar contra
+  el código anterior al arreglo**, de modo que documenta el error que previene y
+  no solo el comportamiento deseado.
+- Escaneo de secretos con gitleaks sobre el historial completo, en cada push.
+- Construcción y validación de la wheel en entorno limpio.
+
+---
+
+## Referencias
+
+- Guo et al. (2021). **AutoDis**. KDD 2021. [arXiv:2012.08986](https://arxiv.org/abs/2012.08986)
+- Liu et al. (2024). **KAN**. [arXiv:2404.19756](https://arxiv.org/abs/2404.19756)
+- Liu et al. (2024). **KAN 2.0**. [arXiv:2408.10205](https://arxiv.org/abs/2408.10205)
+- Blealtan (2024). **efficient-kan**. [GitHub](https://github.com/blealtan/efficient-kan)
+- Parlamento Europeo (2022). **DSA** — Reglamento UE 2022/2065, Art. 27.
+- Parlamento Europeo (2024). **AI Act** — Reglamento UE 2024/1689.
 
 ---
 
 ## Licencia
 
-Código bajo licencia MIT. `kanrec/vendor/efficient_kan.py` conserva la licencia MIT
-original de [blealtan/efficient-kan](https://github.com/blealtan/efficient-kan).
+MIT
