@@ -265,10 +265,11 @@ kanrec/
 
 ## Calidad
 
-- Suite de tests con pytest sobre Python 3.11 y un servicio MongoDB real, con
-  informe de cobertura. Cada test de regresión está escrito para **fallar contra
-  el código anterior al arreglo**, de modo que documenta el error que previene y
-  no solo el comportamiento deseado.
+- **145 tests** con pytest sobre Python 3.11 y un servicio MongoDB real, con un
+  **75 % de cobertura** sobre las 1.226 líneas del paquete. Cada test de
+  regresión está escrito para **fallar contra el código anterior al arreglo**,
+  de modo que documenta el error que previene y no solo el comportamiento
+  deseado.
 - Escaneo de secretos con gitleaks sobre el historial completo, en cada push.
 - Construcción y validación de la wheel en entorno limpio.
 
