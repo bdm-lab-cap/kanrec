@@ -1,21 +1,15 @@
 """
-Regenera la tabla de latencias de la memoria (Resultado 5) a partir de los
-checkpoints reales y mide la equivalencia original/vectorizado.
+Mide la latencia de los cinco modelos comparados y la equivalencia numérica
+entre cada encoder y su versión vectorizada.
 
-Por qué existe
---------------
-1. El sobrecoste "KAN vectorizado frente a normalización directa" se había
-   medido contra una baseline raw SIN vectorizar (un bucle de 13
-   `Linear(1, d)`). Aquí se miden los cinco modelos: raw, raw vectorizado,
-   AutoDis, KAN, KAN vectorizado. El sobrecoste que hay que reportar es
-   KAN-vec / raw-vec: dos encoders optimizados, no uno contra un bucle.
+Se miden raw, raw vectorizado, AutoDis, KAN y KAN vectorizado. El sobrecoste
+relevante es KAN-vec / raw-vec: con ambas baselines vectorizadas, la
+diferencia medida es la del método y no la del bucle por campo.
 
-2. La memoria afirma que la salida vectorizada es "idéntica bit a bit". Eso
-   sólo puede decirse si `torch.equal` devuelve True sobre el checkpoint
-   real y en el hardware de servicio. Este script lo mide y lo escribe en
-   el JSON de salida; la frase de la memoria debe copiar ese valor.
+La equivalencia se comprueba con `torch.equal` sobre el checkpoint real y en
+el hardware de servicio, no solo con la tolerancia de los tests unitarios.
 
-Uso (Colab, GPU T4, tras 04 / con los checkpoints descargados):
+Uso (GPU T4, con los checkpoints de la comparativa disponibles):
 
     python experiments/latency_report.py \
         --ckpt-dir checkpoints --seed 42 --grid-size 10 \
@@ -73,7 +67,7 @@ def main() -> None:
         [torch.randint(0, c + 1, (args.batch,)) for c in arch["cat_cardinalities"]], dim=1
     ).to(device)
 
-    # ── Equivalencia: lo que de verdad se puede afirmar ─────────────────────
+    # ── Equivalencia numérica original / vectorizado ────────────────────────
     equivalence = {}
     for base, vec in (("raw", "raw-vec"), ("kan-bspline", "kan-vec")):
         with torch.no_grad():
@@ -81,11 +75,9 @@ def main() -> None:
         equivalence[vec] = {
             "torch_equal": bool(torch.equal(a, b)),
             "max_abs_diff": float((a - b).abs().max()),
-            "claim": ("idéntica bit a bit" if torch.equal(a, b)
-                      else f"idéntica hasta precisión de float32 (máx {float((a - b).abs().max()):.1e})"),
         }
         print(f"{vec:>8}: torch.equal={equivalence[vec]['torch_equal']}  "
-              f"max|Δ|={equivalence[vec]['max_abs_diff']:.2e}  → «{equivalence[vec]['claim']}»")
+              f"max|Δ|={equivalence[vec]['max_abs_diff']:.2e}")
 
     # ── Latencias ───────────────────────────────────────────────────────────
     results = compare_latency(models, x_num, x_cat, n_runs=args.n_runs, verbose=True)
@@ -97,8 +89,8 @@ def main() -> None:
         "device": device, "batch": args.batch, "n_runs": args.n_runs,
         "speedup_kan_vectorization": ratio("kan-bspline", "kan-vec"),
         "speedup_kan_encoder_only": results["kan-bspline"]["encoder_ms_mean"] / results["kan-vec"]["encoder_ms_mean"],
-        "overhead_kan_vs_raw_UNFAIR (raw sin vectorizar)": ratio("kan-vec", "raw"),
-        "overhead_kan_vs_raw (ambos vectorizados) <- REPORTAR ESTE": ratio("kan-vec", "raw-vec"),
+        "overhead_kan_vs_raw_vectorized": ratio("kan-vec", "raw-vec"),
+        "overhead_kan_vs_raw_unvectorized": ratio("kan-vec", "raw"),
         "kan_vec_vs_autodis": ratio("autodis", "kan-vec"),
         "encoder_share_kan_before": results["kan-bspline"]["encoder_share"],
         "encoder_share_kan_after": results["kan-vec"]["encoder_share"],

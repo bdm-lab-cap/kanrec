@@ -104,8 +104,8 @@ class TestVectorizeModel:
 
 
 class TestVectorizedRaw:
-    """La baseline raw tambien se vectoriza, para que la comparativa de
-    latencia enfrente dos encoders optimizados y no uno contra un bucle."""
+    """La baseline raw tambien tiene version vectorizada, de modo que la
+    comparativa de latencia enfrenta dos encoders optimizados."""
 
     def _raw(self, seed=0, n_fields=13):
         from kanrec.baselines import build_model

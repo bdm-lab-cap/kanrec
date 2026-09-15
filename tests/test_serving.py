@@ -1,6 +1,5 @@
 """
-Tests de kanrec.serving: carga autocontenida de checkpoints, scoring y
-manifiesto. Requieren torch (se saltan si no esta instalado).
+Tests de kanrec.serving: carga de checkpoints, scoring y manifiesto.
 """
 import json
 
@@ -86,8 +85,8 @@ class TestScorer:
         assert np.all((p >= 0) & (p <= 1))
 
     def test_out_of_range_indices_are_clamped_not_fatal(self, tmp_path):
-        """Un indice categorico mayor que el embedding no aborta: se recorta
-        y se cuenta, que es lo que un servicio debe hacer."""
+        """Un indice categorico fuera del rango del embedding se recorta y se
+        cuenta, en lugar de abortar la inferencia."""
         ckpt = tmp_path / "m.pt"
         torch.save(_kan().state_dict(), ckpt)
         scorer = Scorer.from_checkpoint(str(ckpt), NUM_COLS, IDX_COLS)
@@ -141,8 +140,8 @@ class TestManifest:
         check_manifest(str(ckpt), scaler_stats_path=str(stats), numerical_cols=NUM_COLS)
 
     def test_changed_scaler_stats_are_rejected(self, tmp_path):
-        """Servir con estadisticos distintos de los de entrenamiento es
-        exactamente el fallo que el manifiesto existe para impedir."""
+        """Servir con estadisticos distintos de los de entrenamiento debe
+        abortar."""
         ckpt, stats = self._setup(tmp_path)
         stats.write_text(json.dumps({"I4": {"mean": 0.0, "std": 1.0}}))
         with pytest.raises(RuntimeError, match="scaler_stats"):

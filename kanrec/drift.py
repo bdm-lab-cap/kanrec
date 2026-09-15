@@ -18,18 +18,17 @@ Dos señales, ambas calculadas por campo y por lote del stream:
    la referencia. Umbrales habituales en scoring: < 0,10 estable,
    0,10–0,25 vigilar, > 0,25 deriva.
 
-Diseño
-------
-- numpy puro. torch sólo se toca en ``calibrated_ranges``, que importa el
-  encoder de forma perezosa, para que el módulo sea usable desde un
-  notebook de Spark sin cargar el modelo.
-- La referencia (bordes de bins + frecuencias esperadas) se calcula una
-  vez sobre train y se persiste como JSON (``DriftReference``), de modo
-  que el procesamiento del stream no relee train en cada ejecución.
-- La tercera señal que se evaluó y descartó en la memoria (deriva de la
-  forma funcional de φⱼ reajustada sobre el lote) no está aquí a propósito:
-  las dimensiones del embedding no son identificables entre entrenamientos
-  y la medida no discrimina.
+Implementación
+--------------
+numpy puro; torch sólo se importa, de forma perezosa, en
+``calibrated_ranges``, para que el módulo pueda usarse desde un notebook de
+Spark sin cargar el modelo. La referencia (bordes de bins y frecuencias
+esperadas) se ajusta una vez sobre train y se persiste como JSON
+(``DriftReference``), de modo que el stream no relee train en cada ejecución.
+
+Una tercera señal —la deriva de la forma funcional de φⱼ reajustada sobre el
+lote— se evaluó y se descartó: las dimensiones del embedding no son
+identificables entre entrenamientos, de modo que la medida no discrimina.
 """
 from __future__ import annotations
 

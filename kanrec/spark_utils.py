@@ -15,7 +15,7 @@ def apply_pipeline_and_unpack(df, pipeline_model, std_cols):
     Applies a fitted MLlib PipelineModel and unpacks StandardScaler's
     vector output back into the original scalar column names.
 
-    Fix applied (auditoría de tribunal — hallazgo A2): StandardScaler
+    Fix applied: StandardScaler
     writes its output into a *new* vector column (conventionally named
     "num_scaled"). If nothing unpacks it, the original scalar columns
     stay in their raw, unnormalised scale, and any downstream code that
@@ -54,7 +54,7 @@ def random_sample(df, n_rows: int, seed: int, safety_margin: float = 3.0):
     Draws an approximately-`n_rows` random sample preserving the natural
     row order / class distribution of `df`.
 
-    Fix applied (auditoría de tribunal — hallazgo A4): `.limit(n)` is NOT
+    Fix applied: `.limit(n)` is NOT
     a random sample — it returns the first `n` rows in whatever order the
     underlying files happen to be read, which for a time-ordered dataset
     like Criteo means any two `.limit()` calls at different offsets (e.g.
@@ -86,13 +86,11 @@ def random_sample(df, n_rows: int, seed: int, safety_margin: float = 3.0):
 
 # ── Normalización compartida batch / stream ──────────────────────────────────
 #
-# 01 (ingesta batch) y 06 (procesamiento del stream) deben aplicar EXACTAMENTE
-# la misma transformación. Hasta ahora cada notebook llevaba su propia copia
-# del código (imputación, log1p, estandarización, 26 joins de indexado). Dos
-# copias iguales hoy no garantizan dos copias iguales mañana; una función
-# única sí. 01 la usa con los mapas recién ajustados sobre train; 06 la usa
-# con los mismos mapas leídos de la tabla `cat_index_maps` y los estadísticos
-# de `scaler_stats.json`, que 01 persiste precisamente para esto.
+# 01 (ingesta batch) y 06 (procesamiento del stream) aplican exactamente la
+# misma transformación llamando a estas funciones: imputación, log1p,
+# estandarización y los 26 joins de indexado categórico. 01 las usa con los
+# mapas recién ajustados sobre train; 06, con esos mismos mapas leídos de la
+# tabla `cat_index_maps` y los estadísticos de `scaler_stats.json`.
 
 LOG_COLS_DEFAULT = [f"I{i}" for i in range(1, 6)]
 STD_COLS_DEFAULT = [f"I{i}" for i in range(6, 14)]
@@ -160,9 +158,9 @@ def apply_index_maps(df, index_maps: dict, categorical_cols, chunk: int = 6,
     ``n_cats`` (equivalente a handleInvalid="keep").
 
     `materialize(df, i) -> df` es opcional: 01 lo usa para cortar el linaje
-    cada `chunk` columnas escribiendo una tabla temporal (encadenar los 26
-    joins en un único plan lo aborta el motor en Fabric). En el stream, con
-    lotes pequeños, no hace falta y se pasa None.
+    cada `chunk` columnas escribiendo una tabla temporal, ya que encadenar
+    los 26 joins en un único plan lo aborta el motor en Fabric. En el stream,
+    con lotes pequeños, no hace falta.
     """
     from pyspark.sql import functions as F
 

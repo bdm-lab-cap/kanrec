@@ -1,14 +1,13 @@
 """
 Encoder KAN vectorizado.
 
-Motivación (medición, no intuición)
------------------------------------
-El perfilado de latencia sobre GPU T4 (memoria, Resultado 5) mostró que el
-encoder numérico consumía la mayor parte del tiempo de inferencia del modelo
-completo y que KAN-REC era varias veces más lento que la normalización
-directa. Las cifras de referencia son las de la tabla de la memoria, medidas
-con ``kanrec.latency.compare_latency`` sobre el checkpoint final; no se
-duplican aquí para que no se desincronicen.
+Motivación
+----------
+El perfilado sobre GPU T4 mostró que el encoder numérico consumía la mayor
+parte del tiempo de inferencia del modelo completo, y que KAN-REC era varias
+veces más lento que la normalización directa. Las cifras se miden con
+``kanrec.latency.compare_latency`` sobre el checkpoint final y no se duplican
+aquí para que no se desincronicen.
 
 La causa no es que evaluar B-splines sea caro en sí, sino que
 `KANNumericalEncoder.forward` recorre los campos en un **bucle de Python**:
@@ -39,20 +38,18 @@ campo, se obtiene el mismo resultado con un solo kernel:
 Equivalencia numérica
 ---------------------
 `VectorizedKANEncoder.from_field_kans()` copia los pesos de un encoder ya
-entrenado. La optimización cambia la velocidad, nunca el modelo. Dos niveles
-de verificación, y conviene no confundirlos al reportar:
+entrenado: la optimización cambia la velocidad, nunca el modelo. Se verifica
+a dos niveles, que no son intercambiables:
 
-- Los tests unitarios comprueban equivalencia con tolerancia 1e-5 sobre
-  modelos aleatorios en CPU (`tests/test_vectorized.py`).
-- La equivalencia sobre el checkpoint real y en el hardware de servicio se
-  mide con `torch.equal` / diferencia máxima absoluta en el notebook de
-  cierre. Un `bmm` y un `F.linear` pueden redondear distinto en GPU, así
-  que "bit a bit" sólo puede afirmarse si esa medición da exactamente 0;
-  si da ~1e-7, la afirmación correcta es "idéntica hasta precisión de
-  float32".
+- `tests/test_vectorized.py` comprueba la equivalencia con tolerancia 1e-5
+  sobre modelos aleatorios en CPU.
+- `experiments/latency_report.py` la mide con `torch.equal` y diferencia
+  máxima absoluta sobre el checkpoint real y en el hardware de servicio.
+  Un `bmm` y un `F.linear` pueden redondear distinto en GPU, de modo que la
+  igualdad exacta sólo puede afirmarse si esa medición da cero.
 
-Cuándo ayuda y cuándo no (medido, no supuesto)
-----------------------------------------------
+Cuándo ayuda y cuándo no
+------------------------
 En **CPU** la versión vectorizada es ~1.3x MÁS LENTA: sin coste de
 lanzamiento de kernel que amortizar, el bucle de 13 llamadas pequeñas gana
 frente a calcular las bases B-spline de los 13 campos en tensores mayores.
@@ -79,12 +76,10 @@ class VectorizedRawEncoder(nn.Module):
     normalización directa): las 13 proyecciones ``Linear(1, d)`` se evalúan
     en una única operación elemento a elemento.
 
-    Existe por honestidad en la comparativa de latencia, no porque la
-    baseline lo necesite: ``RawNumericalEncoder`` también recorre los
-    campos en un bucle de Python, así que el sobrecoste "KAN vectorizado
-    frente a raw" medido contra la baseline sin vectorizar compara un
-    encoder optimizado con otro que no lo está. Con ambos vectorizados el
-    sobrecoste que se reporta es el del método, no el del bucle.
+    ``RawNumericalEncoder`` también recorre los campos en un bucle de Python,
+    de modo que comparar el encoder KAN vectorizado contra la baseline sin
+    vectorizar mide en parte la diferencia entre bucle y operación única. Con
+    ambos vectorizados, el sobrecoste medido es el del método.
     """
 
     def __init__(self, num_fields: int, embedding_dim: int):

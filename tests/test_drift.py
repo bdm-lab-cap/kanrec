@@ -1,10 +1,9 @@
 """
 Tests de kanrec.drift.
 
-Todo es numpy puro salvo la clase que toca el encoder, que se salta si
-torch no está instalado. Cada test de comportamiento está escrito para
-distinguir "detecta deriva" de "devuelve un número": se comprueba tanto el
-caso sin deriva (debe callar) como el caso con deriva (debe avisar).
+numpy puro salvo la clase que construye un encoder, que requiere torch. Cada
+caso con deriva tiene su contraparte sin deriva, para distinguir que el
+detector discrimina y no solo que devuelve un número.
 """
 import json
 
@@ -70,8 +69,8 @@ class TestDriftReference:
             assert e[0] == -np.inf and e[-1] == np.inf
 
     def test_repeated_quantiles_are_deduplicated(self):
-        """I3 tiene 60% de ceros: varios cuantiles coinciden en 0 y no
-        pueden convertirse en bins vacios de ancho cero."""
+        """I3 tiene 60% de ceros: varios cuantiles coinciden en 0 y no deben
+        producir bins de ancho cero."""
         ref = DriftReference.fit(_ref_data(), FIELDS, n_bins=10)
         edges_i3 = ref.edges[2]
         assert len(edges_i3) == len(set(edges_i3))
@@ -93,7 +92,7 @@ class TestDriftReference:
 
 class TestDriftReport:
     def test_no_drift_stays_quiet(self):
-        """Un lote de la misma distribucion que train no debe alertar."""
+        """Un lote de la misma distribucion que train no alerta."""
         ref = DriftReference.fit(_ref_data(), FIELDS, calibrated_ranges=[(-4, 4), (0, 8), (-1, 4)])
         rows = drift_report(_ref_data(5_000), ref)
         assert [r["psi_level"] for r in rows] == ["ok"] * 3
@@ -101,8 +100,8 @@ class TestDriftReport:
         assert all(r["coverage"] >= COVERAGE_ALERT for r in rows)
 
     def test_shifted_distribution_is_detected(self):
-        """Desplazar I1 dos desviaciones debe disparar PSI y cobertura, y
-        SOLO en I1: las senales son por campo."""
+        """Desplazar I1 dos desviaciones dispara PSI y cobertura, y solo en
+        I1: las senales se calculan por campo."""
         ref = DriftReference.fit(_ref_data(), FIELDS, calibrated_ranges=[(-3, 3), (0, 8), (-1, 4)])
         batch = _ref_data(5_000)
         batch[:, 0] += 2.0
@@ -113,9 +112,9 @@ class TestDriftReport:
         assert rows[1]["psi_level"] == "ok" and rows[2]["psi_level"] == "ok"
 
     def test_out_of_range_without_distribution_change(self):
-        """Caso que SOLO detecta la cobertura: la distribucion del lote es
-        la misma, pero el modelo fue calibrado sobre un rango mas estrecho
-        (p.ej. un checkpoint antiguo). PSI calla, cobertura avisa."""
+        """La distribucion del lote no cambia, pero el modelo se calibro
+        sobre un rango mas estrecho: el PSI no lo detecta y la cobertura
+        si."""
         ref = DriftReference.fit(_ref_data(), FIELDS)
         narrow = [(-0.5, 0.5), (0, 8), (-1, 4)]
         rows = drift_report(_ref_data(5_000), ref, calibrated=narrow)

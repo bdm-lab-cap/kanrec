@@ -126,10 +126,8 @@ def main(out_path: str, n_dims_shown: int = 4) -> None:
     fig.tight_layout()
     fig.savefig(out_path, dpi=160, bbox_inches="tight")
     print(f"\nFigura guardada en {out_path}")
-    print("Lectura: con señal no lineal el encoder produce curvas (R2 lineal bajo);")
-    print("con señal lineal produce rectas (R2 lineal alto). Por tanto, que en")
-    print("Criteo salgan rectas es un hallazgo sobre los datos, no una")
-    print("limitación del extractor simbólico.")
+    print("Con señal no lineal el encoder produce curvas (R2 lineal bajo);")
+    print("con señal lineal produce rectas (R2 lineal alto).")
 
 
 if __name__ == "__main__":

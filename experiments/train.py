@@ -9,7 +9,7 @@ Usage:
     python experiments/train.py --encoder raw --seed 256
     python experiments/train.py --dataset avazu --grid-size 5
 
-Fix applied (2026-09, auditoría de tribunal — hallazgo B6)
+Corregido en la revisión de septiembre de 2026
 --------------------------------------------------------------
 Every branch of this script used to build a KANRecModel regardless of
 --encoder: the flag only changed the checkpoint's file name, so
@@ -85,12 +85,12 @@ def train(config: dict) -> float:
             f"numerical fields={len(dm.numerical_cols)}"
         )
 
-        # Grid calibration (hallazgo A3): only kan-bspline needs it. Uses a
+        # Grid calibration: only kan-bspline needs it. Uses a
         # sample of *normalised* training data drawn before any weight
         # update, so the spline grid matches the real distribution of each
         # field from the very first training step.
         #
-        # 50k rows, not a fixed batch count (hallazgo verificado on the real
+        # 50k rows, not a fixed batch count (verified on the real
         # 8M-row Criteo run in Fabric): I6 and I12 reach ~690 standard
         # deviations after StandardScaler -- extreme tails. A ~5-10k row
         # sample had low odds of including those outliers, and the

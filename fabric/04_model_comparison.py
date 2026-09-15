@@ -2,7 +2,7 @@
 # SUSTITUYE a los antiguos 04_training_kanrec, 07_autodis_baseline y
 # 08_comparativa_encoders, que quedan eliminados del repositorio.
 #
-# Por que se consolidan los tres en uno (auditoria de tribunal - hallazgo B5/B6):
+# Motivo de la consolidacion:
 #   - Los tres definian KANRecModel por su cuenta, con arquitecturas que no
 #     coincidian entre si ni con el paquete instalable.
 #   - 04 calculaba las cardinalidades categoricas sobre train/val/test
@@ -15,7 +15,7 @@
 # exactamente el mismo backbone de interaccion — asi que la unica variable
 # entre ellos es, de verdad, el encoder numerico.
 #
-# Fixes aplicados en este notebook:
+# Correcciones aplicadas en este notebook:
 #   A2  — lee Tables/train ya normalizado por 01 (StandardScaler llega
 #         de verdad a I6..I13).
 #   A3  — calibra el grid de las B-splines a la distribucion real de cada
@@ -122,7 +122,7 @@ print(f"Cardinalidades categoricas (sobre TRAIN completo): {cat_cardinalities}")
 
 
 # ============================================================================
-# CELDA 3 — Dataset con muestreo ALEATORIO real (hallazgo A4)
+# CELDA 3 — Dataset con muestreo ALEATORIO real
 # ============================================================================
 class CriteoDataset(Dataset):
     """
@@ -214,7 +214,7 @@ def train_one_run(
     lr: float | None = None,
     embedding_dim: int = 16,
     grid_size: int = 10,
-    ckpt_tag: str = "",
+    ckpt_tag: str = "",     # sufijo del checkpoint, para no pisar corridas distintas
 ) -> dict:
     torch.manual_seed(seed)
     lr = lr if lr is not None else DEFAULT_LR[encoder_name]
@@ -227,16 +227,16 @@ def train_one_run(
         kan_grid_size=grid_size,
     ).to(device)
 
-    # Calibracion del grid (hallazgo A3): solo kan-bspline la necesita.
+    # Calibracion del grid: solo kan-bspline la necesita.
     # Se hace SIEMPRE sobre datos normalizados (celda 01 ya garantiza esto),
     # con una muestra generosa para cubrir bien la distribucion de cada campo.
     if hasattr(model, "calibrate"):
-        # 50k filas, no 5 lotes fijos (hallazgo verificado tras la primera
+        # 50k filas, no 5 lotes fijos (verificado tras la primera
         # corrida real en Fabric: I6 e I12 llegan a ~690 desviaciones tipicas
         # en Criteo -- colas extremas). Con solo ~5k-10k filas de muestra la
         # probabilidad de capturar esos outliers era baja, y el grid
         # calibrado podia dejarlos fuera de cobertura (el mismo problema del
-        # hallazgo A3, para esas pocas filas concretas). Acumular por FILAS
+        # la revisión, para esas pocas filas concretas). Acumular por FILAS
         # en vez de por numero de lotes es ademas robusto a que cada script
         # use un batch_size distinto.
         CALIB_ROWS = 50_000
@@ -358,9 +358,6 @@ print("\n" + "=" * 70)
 print("RESUMEN — media +/- desviacion sobre 3 semillas (42, 123, 256)")
 print("=" * 70)
 print(summary.to_string())
-print("\nNOTA: si test_auc_std es del mismo orden que la diferencia entre dos")
-print("encoders, esa diferencia NO es significativa. Dilo asi en la memoria")
-print("en vez de quedarte solo con la media.")
 
 # Persistencia en Delta (consumido por Power BI, ver powerbi/README.md)
 spark.createDataFrame(results_df).write.format("delta").mode("overwrite").save("Tables/experiment_results")
@@ -368,13 +365,12 @@ print("\n✓ Tables/experiment_results escrita.")
 
 
 # ============================================================================
-# CELDA 6b — Manifiesto de cada checkpoint (lo exige 06 para servir)
+# CELDA 6b — Manifiesto de cada checkpoint
 # ============================================================================
-# Un state_dict desnudo no dice con que normalizacion se entreno ni con que
-# version del paquete. El manifiesto deja junto a cada checkpoint: version
-# de kanrec, commit, columnas, cardinalidades, hiperparametros, hash del
-# propio checkpoint y hash de scaler_stats.json. 06 verifica ambos hashes
-# antes de puntuar una sola impresion (kanrec.serving.check_manifest).
+# Junto a cada checkpoint se escribe un JSON con la version del paquete, el
+# commit, las columnas, las cardinalidades, los hiperparametros y el hash
+# SHA-256 del propio checkpoint y de scaler_stats.json. 06 verifica ambos
+# hashes antes de servir (kanrec.serving.check_manifest).
 from kanrec.serving import write_manifest
 
 STATS_PATH = "/lakehouse/default/Files/config/scaler_stats.json"
@@ -395,16 +391,13 @@ for r in results:
 # ============================================================================
 # CELDA 7 (opcional) — Ablacion ligera de grid_size, solo KAN-REC
 # ============================================================================
-# Un resultado adicional barato: si grid_size=5 (el valor por defecto de
-# efficient-kan) es notablemente peor que 10 o 20 ahora que el grid SI se
-# calibra, es evidencia de que la capacidad del spline importa una vez que
-# el rango es el correcto — que es justo lo que la memoria puede reportar
-# como "Resultado 2" ademas de la comparativa principal.
-# Los tres valores se entrenan con el MISMO presupuesto (15 epocas,
-# paciencia 2) para que la ablacion sea comparable entre si. Sus checkpoints
-# llevan sufijo "_abl": sin el, la corrida con grid_size=10 y seed=42
-# SOBREESCRIBIA el checkpoint de la comparativa principal (30 epocas), que es
-# el que 05 y 06 cargan, con una version entrenada con la mitad de epocas.
+# Ablacion de grid_size. Si 5 (el valor por defecto de efficient-kan) es
+# notablemente peor que 10 o 20 ahora que el grid si se calibra, la capacidad
+# del spline importa una vez que el rango es el correcto.
+# Los tres valores se entrenan con el mismo presupuesto (15 epocas, paciencia
+# 2) para que la ablacion sea comparable entre si. Los checkpoints llevan
+# sufijo "_abl" para no pisar los de la comparativa principal, que son los que
+# cargan 05 y 06.
 ablation_results = []
 for grid_size in [5, 10, 20]:
     r = train_one_run("kan-bspline", seed=42, grid_size=grid_size, max_epochs=15, patience=2,

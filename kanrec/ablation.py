@@ -250,7 +250,5 @@ def substitution_ablation(model, test_loader, symbolic_results: dict,
         elif err < 0.40:
             print("  -> Fidelidad razonable: la formula captura la tendencia principal.")
         else:
-            print("  -> Fidelidad BAJA: la formula no reproduce la forma de phi. "
-                  "Debe reportarse asi en la memoria, no presentarse como "
-                  "descripcion fiel del encoder.")
+            print("  -> Fidelidad BAJA: la formula no reproduce la forma de phi.")
     return report

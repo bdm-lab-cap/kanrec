@@ -2,38 +2,31 @@
 Servicio del modelo: cargar un checkpoint y puntuar impresiones, en local o
 desde Spark (procesamiento del stream, notebook 06).
 
-Por qué existe
---------------
-Hasta ahora un checkpoint era un ``state_dict`` desnudo. Para cargarlo
-había que saber de antemano el número de campos, la dimensión de embedding,
-el ``grid_size`` y las cardinalidades categóricas (05 las recalculaba
-leyendo las formas de los pesos; 04 las recalculaba leyendo la tabla
-``train``). Un modelo que no se puede cargar sin reconstruir el contexto de
-entrenamiento no se puede servir.
+Carga autocontenida
+-------------------
+``infer_architecture`` deduce el encoder y los hiperparámetros estructurales
+de las formas del ``state_dict``, de modo que un checkpoint puede cargarse
+sin reconstruir el contexto de entrenamiento (número de campos, dimensión de
+embedding, ``grid_size``, cardinalidades). El grid calibrado viaja dentro del
+checkpoint como buffer. Para el encoder KAN se devuelve por defecto la
+versión vectorizada (``kanrec.vectorized``), que es la que se sirve.
 
-Este módulo hace dos cosas:
+Manifiesto
+----------
+``write_manifest`` escribe junto al checkpoint un JSON con la versión del
+paquete, el commit, las columnas, las cardinalidades, los hiperparámetros y
+el hash SHA-256 del propio checkpoint y de ``scaler_stats.json``.
+``check_manifest`` los verifica antes de servir: es lo que hace comprobable
+—y no solo convencional— que el stream puntúa con los mismos estadísticos de
+normalización con los que se entrenó.
 
-1. **Carga autocontenida.** ``infer_architecture`` deduce el encoder y todos
-   los hiperparámetros estructurales de las formas del ``state_dict``; el
-   grid calibrado viaja dentro del checkpoint como buffer, así que el modelo
-   cargado es exactamente el auditado. Para el encoder KAN se devuelve la
-   versión vectorizada (``kanrec.vectorized``), que es la que se sirve.
-
-2. **Manifiesto.** ``write_manifest`` deja junto al checkpoint un JSON con
-   versión del paquete, commit, columnas, cardinalidades, hiperparámetros y
-   el hash SHA-256 del checkpoint y de ``scaler_stats.json``. Es lo que
-   permite afirmar en el stream *qué* modelo puntúa y *con qué*
-   normalización: la consistencia batch/stream deja de ser una convención y
-   pasa a ser verificable (``check_manifest``).
-
-Robustez en servicio
---------------------
-Los índices categóricos del stream se recortan al rango del embedding.
-En batch, 04 calcula la cardinalidad como ``max(train, val, test) + 1`` y
-06 asigna a las categorías no vistas ``len(categorías de train)``; ambos
-caben en el embedding, pero un productor que enviase un índice mayor
-abortaría la inferencia con un *device-side assert*. En servicio se prefiere
-recortar y contar (``Scorer.n_clamped``) a abortar.
+Índices fuera de rango
+----------------------
+04 calcula la cardinalidad como ``max(train, val, test) + 1`` y 06 asigna a
+las categorías no vistas ``len(categorías de train)``; ambos caben en el
+embedding. Un índice mayor abortaría la inferencia con un *device-side
+assert*, así que en servicio se recorta y se cuenta
+(``Scorer.n_clamped``) en lugar de abortar.
 """
 from __future__ import annotations
 
@@ -250,9 +243,9 @@ def write_manifest(ckpt_path: str, numerical_cols: list[str], categorical_cols: 
     Escribe ``<ckpt>.manifest.json`` junto al checkpoint. Devuelve la ruta.
 
     ``extra`` admite cualquier metadato de la ejecución (seed, lr, métricas
-    de test, run_id de MLflow…). El manifiesto no sustituye a MLflow: es
-    lo que el servicio necesita para verificar que puntúa con el modelo y
-    la normalización correctos sin acceso al tracking server.
+    de test, run_id de MLflow…). No sustituye al tracking de MLflow: contiene
+    lo que el servicio necesita para verificar modelo y normalización sin
+    acceso al tracking server.
     """
     import torch
     from . import __version__
@@ -296,9 +289,7 @@ def check_manifest(ckpt_path: str, scaler_stats_path: str | None = None,
     """
     Verifica que el checkpoint y (opcionalmente) ``scaler_stats.json`` son
     los mismos ficheros que describe el manifiesto. Lanza ``RuntimeError``
-    si no coinciden: servir un modelo con estadísticos de normalización
-    distintos de los de su entrenamiento es exactamente el fallo que este
-    módulo existe para impedir.
+    si no coinciden.
     """
     m = load_manifest(ckpt_path)
     problems = []

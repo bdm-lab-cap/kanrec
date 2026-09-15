@@ -21,7 +21,7 @@
 # puede haber quedado instalado en el entorno pip aislado de la sesion
 # anterior y un simple re-run de la celda no lo revierte.
 #
-# Fix applied (2026-09, auditoria de tribunal - hallazgo A2)
+# Corregido en la revisión de septiembre de 2026
 # --------------------------------------------------------------
 # StandardScaler used to write its output into a NEW vector column
 # ("num_scaled") that no downstream notebook ever read: every training
@@ -99,7 +99,7 @@ raw = (spark.read
        .schema(schema)
        .csv("Files/raw/criteo_10m.tsv"))
 
-# NOTA (deferred, hallazgo B9): los nulos se imputan a 0.0 sin una mascara
+# NOTA (pendiente): los nulos se imputan a 0.0 sin una mascara
 # de "is_null" separada, así que "ausente" y "vale cero" quedan fusionados.
 # En Criteo el patron de ausencia es predictivo por si mismo; anadir 13
 # columnas binarias I{j}_is_null es la mejora natural del siguiente pase,
@@ -129,10 +129,9 @@ print(f"Total rows: {total:,}")
 
 train_raw, val_raw, test_raw = raw.randomSplit([0.8, 0.1, 0.1], seed=42)
 
-# Imputacion + log1p con la MISMA funcion que usa 06 sobre el stream
-# (kanrec.spark_utils). La imputacion ya se aplico sobre `raw` antes de
-# materializar; volver a aplicarla es idempotente (abs de no negativos sin
-# nulos). log1p se aplica aqui una unica vez.
+# Imputacion y log1p con la misma funcion que aplica 06 sobre el stream. La
+# imputacion ya se hizo sobre `raw` antes de materializar y es idempotente
+# (valor absoluto de no negativos sin nulos); log1p se aplica aqui una vez.
 from kanrec.spark_utils import impute_and_log, apply_scaler as _apply_scaler, apply_index_maps
 
 train_log = impute_and_log(train_raw, NUMERICAL_COLS, LOG_COLS)
@@ -155,9 +154,8 @@ scaler_stats = {c: (float(_stats[f"m_{c}"]),
                 for c in STD_COLS}
 
 def apply_scaler(df):
-    # Delegado en kanrec.spark_utils.apply_scaler: la misma funcion, con los
-    # mismos estadisticos (persistidos mas abajo en scaler_stats.json), es la
-    # que 06 aplica al stream.
+    # Misma funcion y mismos estadisticos (persistidos mas abajo en
+    # scaler_stats.json) que aplica 06 sobre el stream.
     return _apply_scaler(df, scaler_stats, STD_COLS)
 
 # ── Indexado categorico (nativo, join broadcast) ────────────────────────────
@@ -208,9 +206,8 @@ def apply_scaler_and_index(df, name):
         print(f"  {name}: {min(i + CHUNK, len(CATEGORICAL_COLS))}/{len(CATEGORICAL_COLS)} categoricas indexadas")
         return spark.read.table(tmp)        # corta el linaje del plan
 
-    # El bucle de joins vive en kanrec.spark_utils.apply_index_maps, la
-    # misma funcion que 06 aplica al stream (alli sin materializar: los
-    # lotes son pequenos y el plan no crece hasta romperse).
+    # apply_index_maps es la misma funcion que usa 06; alli no materializa,
+    # porque con lotes pequenos el plan no llega a romperse.
     return apply_index_maps(df, index_maps, CATEGORICAL_COLS, chunk=CHUNK,
                             materialize=_materialize)
 
@@ -277,7 +274,7 @@ written.select(STD_COLS).describe().show()
 
 # Asercion dura: si I6..I13 NO estan normalizadas en la tabla escrita, parar
 # aqui con un error claro en vez de dejar que 04/05 entrenen sobre datos
-# crudos y produzcan curvas espuriamente lineales (hallazgo A2).
+# crudos y produzcan curvas espuriamente lineales.
 from pyspark.sql import functions as F
 stats = written.select(
     *[F.stddev(c).alias(f"std_{c}") for c in STD_COLS]
