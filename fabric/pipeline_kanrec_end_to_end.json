@@ -55,7 +55,7 @@
         "type": "TridentNotebook",
         "dependsOn": [
           {
-            "activity": "01_Ingesta_Spark",
+            "activity": "03_Enriquecimiento_API",
             "dependencyConditions": [
               "Succeeded"
             ]
@@ -103,34 +103,6 @@
         }
       },
       {
-        "name": "06_Procesamiento_Streaming",
-        "description": "Aplica al stream los MISMOS estadísticos del batch (scaler_stats.json y cat_index_maps de 01), garantizando consistencia entre entrenamiento y servicio. Depende de 01 por eso, no por los datos del stream.",
-        "type": "TridentNotebook",
-        "dependsOn": [
-          {
-            "activity": "01_Ingesta_Spark",
-            "dependencyConditions": [
-              "Succeeded"
-            ]
-          },
-          {
-            "activity": "04_Comparativa_Modelos",
-            "dependencyConditions": [
-              "Succeeded"
-            ]
-          }
-        ],
-        "policy": {
-          "timeout": "0.00:45:00",
-          "retry": 2,
-          "retryIntervalInSeconds": 60
-        },
-        "typeProperties": {
-          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_06",
-          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
-        }
-      },
-      {
         "name": "09_MongoDB_Persistencia",
         "description": "Persiste los resultados simbólicos y los embeddings en MongoDB Atlas con el esquema único de kanrec.schema.",
         "type": "TridentNotebook",
@@ -153,12 +125,40 @@
         }
       },
       {
+        "name": "06_Procesamiento_Streaming",
+        "description": "Aplica al stream los MISMOS estadísticos del batch (scaler_stats.json y cat_index_maps de 01), garantizando consistencia entre entrenamiento y servicio. Depende de 01 por eso, no por los datos del stream.",
+        "type": "TridentNotebook",
+        "dependsOn": [
+          {
+            "activity": "09_MongoDB_Persistencia",
+            "dependencyConditions": [
+              "Succeeded"
+            ]
+          }
+        ],
+        "policy": {
+          "timeout": "0.00:45:00",
+          "retry": 2,
+          "retryIntervalInSeconds": 60
+        },
+        "typeProperties": {
+          "notebookId": "REEMPLAZAR_ID_NOTEBOOK_06",
+          "workspaceId": "REEMPLAZAR_ID_WORKSPACE"
+        }
+      },
+      {
         "name": "Notificar_Fallo",
         "description": "Se activa si cualquier etapa crítica falla. Permite enterarse del fallo sin revisar el historial a mano.",
         "type": "Office365Outlook",
         "dependsOn": [
           {
             "activity": "01_Ingesta_Spark",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          },
+          {
+            "activity": "03_Enriquecimiento_API",
             "dependencyConditions": [
               "Failed"
             ]
@@ -171,6 +171,18 @@
           },
           {
             "activity": "05_Extraccion_Simbolica",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          },
+          {
+            "activity": "09_MongoDB_Persistencia",
+            "dependencyConditions": [
+              "Failed"
+            ]
+          },
+          {
+            "activity": "06_Procesamiento_Streaming",
             "dependencyConditions": [
               "Failed"
             ]
