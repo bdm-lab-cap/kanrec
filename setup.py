@@ -14,7 +14,7 @@ setup(
     #
     # mlflow is NOT a dependency of the kanrec library itself (grep confirms
     # no module under kanrec/ imports it -- only the training scripts
-    # experiments/train.py, fabric/*.py and the Colab notebook do, each
+    # los notebooks de Fabric y de Colab lo hacen, cada
     # with their own `import mlflow`). It used to be listed here as a hard
     # dependency, which meant `%pip install kanrec` inside a Microsoft
     # Fabric notebook transitively installed an unpinned PyPI mlflow that
@@ -76,6 +76,7 @@ setup(
         ],
         "streaming": ["confluent-kafka>=2.3.0"],
         "api":       ["fastapi>=0.110.0", "uvicorn>=0.29.0"],
+        "dashboard": ["streamlit>=1.32.0", "plotly>=5.20.0"],
         "spark":     ["pyspark>=3.5.0"],
     },
 )

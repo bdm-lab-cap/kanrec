@@ -150,11 +150,10 @@ def build_model(
     Builds the model for a named encoder, all sharing the same
     InteractionMLP backbone and head via CTRModel.
 
-    This is what fixes `experiments/train.py --encoder ...`: previously the
-    flag only changed the checkpoint's file name because every branch
-    built a KANRecModel regardless. Now it actually selects the numerical
-    encoder, so `run_all.sh`'s three runs are three different models
-    instead of the same model saved under three names.
+    Antes, el flag --encoder solo cambiaba el nombre del checkpoint porque
+    todas las ramas construian un KANRecModel. Aqui selecciona de verdad el
+    encoder numerico, de modo que tres corridas son tres modelos distintos y
+    no el mismo guardado con tres nombres.
 
     Args:
         encoder: one of "raw", "autodis", "kan-bspline".

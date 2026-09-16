@@ -284,7 +284,7 @@ class TestModelFactory:
 
     def test_build_model_produces_different_encoders(self):
         """
-        Hallazgo B6: antes, train.py --encoder solo cambiaba el nombre del
+        Antes, el flag --encoder solo cambiaba el nombre del
         checkpoint porque las tres ramas construían KANRecModel. Aquí
         comprobamos que las tres ramas usan clases de encoder distintas.
         """
@@ -346,7 +346,7 @@ class TestOperatorLibraryRobustness:
 
     def test_operator_library_matches_the_fabric_notebook(self):
         """
-        Hallazgo C9: el paquete y fabric/05_symbolic_extraction.py definian
+        El paquete y fabric/05_symbolic_extraction.py definian
         'exp' de forma distinta (sin clip vs clip a +-10), asi que podian
         elegir operadores distintos sobre la misma curva.
         """

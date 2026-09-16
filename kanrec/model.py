@@ -9,7 +9,7 @@ Earlier, `KANRecModel` here used a `KANInteractionLayer` (a second KAN),
 while every training notebook (04, 07, 08, 09) independently redefined
 `KANRecModel` with a plain MLP interaction and trained *that* version —
 the one the memoria documents. So the installable package was not the
-model that produced the thesis's results, and `experiments/train.py`'s
+model that produced the thesis's results, and the training notebooks'
 `--encoder` flag changed only the checkpoint's file name: it always built
 a KANRecModel regardless of the requested encoder (see baselines.py).
 
@@ -17,7 +17,7 @@ Now there is exactly one interaction backbone (`InteractionMLP`) and one
 prediction head, shared by all three encoders via `CTRModel`. The only
 thing that differs between raw / AutoDis / KAN-REC is the numerical
 encoder plugged in — which is exactly the variable the thesis is about.
-Notebooks and `experiments/train.py` should build models through
+The notebooks build models through
 `kanrec.baselines.build_model(...)`, never redefine them locally.
 """
 from __future__ import annotations

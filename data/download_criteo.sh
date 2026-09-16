@@ -1,7 +1,7 @@
 #!/bin/bash
 # Descarga el dataset Criteo Display Advertising y genera la submuestra de 10M filas.
 #
-# NOTA sobre la fuente (verificado en 2026): la competicion de Kaggle
+# La competicion de Kaggle
 # "criteo-display-ad-challenge" ya no permite la descarga del fichero, asi que
 # el script original (`kaggle competitions download -c ...`) no funcionaba y la
 # ingesta no era reproducible por nadie. Se usan en su lugar los mirrors
