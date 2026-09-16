@@ -41,10 +41,14 @@ pipeline de Fabric ejecuta sobre su propio checkpoint (200.000 filas): otro
 modelo, mismo resultado cualitativo, `linear` en todos los campos y en las tres
 semillas.
 
-**Estabilidad.** En `estabilidad_semillas.csv`: 8 de 11 campos recuperan el
-operador idéntico en las tres semillas; la media ponderada es 90,9 %. Los tres
-campos con 2/3 (I3, I7, I12) son los de mayor R², donde varios operadores son
-numéricamente equivalentes sobre una curva cuasi-lineal.
+**Estabilidad.** En `estabilidad_semillas.csv`, la columna `operator` es
+`linear` en los once campos: **ninguna semilla elige un operador distinto**. La
+columna `stability` no mide acuerdo de operador sino retención: cuenta en
+cuántas semillas el campo superó la poda por norma L1 y el umbral de R². Ocho
+campos se retienen en las tres y tres (I3, I7, I12) en dos de tres, de ahí el
+90,9 %. Que los tres oscilantes sean los de mayor R² (0,997–0,998) descarta que
+sea ambigüedad del ajuste: es el umbral del percentil 20, que varía ligeramente
+entre entrenamientos.
 
 **Fidelidad.** En `fidelidad.csv`: error relativo de curva 0,066 ± 0,003 y
 degradación de AUC 0,033 ± 0,004. El AUC base de este análisis (0,72) es menor
@@ -68,10 +72,14 @@ las operaciones en coma flotante.
 
 ## Nota sobre el número de campos
 
-La selección por norma L1 de los coeficientes spline retiene diez u once campos
-según el checkpoint: I3 e I12 quedan cerca del umbral del percentil 20 y entran
-o no dependiendo del modelo. La conclusión no cambia, porque el operador es
-lineal en todos los campos de todas las ejecuciones.
+La selección por norma L1 retiene diez u once campos de los trece según el
+checkpoint: I3, I7 e I12 quedan cerca del umbral del percentil 20 y entran o no
+dependiendo del modelo. La conclusión no cambia, porque el operador es lineal en
+todos los campos retenidos de todas las ejecuciones.
+
+La extracción usa un umbral de aceptación de R² ≥ 0,90 sobre la media de las
+dieciséis dimensiones, tanto en el paquete (`SymbolicExtractor`) como en
+`fabric/05` y en el cuaderno de cierre.
 
 ## Lo que no está aquí
 

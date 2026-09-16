@@ -44,7 +44,8 @@ class SymbolicExtractor:
     """
     Args:
         model:            Trained KANRecModel.
-        r2_threshold:     Minimum R² to accept a symbolic operator (default 0.95).
+        r2_threshold:     Minimum R² to accept a symbolic operator (default 0.90,
+                          the value used for the reported results).
         l1_percentile:    Bottom percentile of L1 norms to prune (default 20).
         mongo_uri:        MongoDB connection string.
     """
@@ -52,7 +53,7 @@ class SymbolicExtractor:
     def __init__(
         self,
         model,
-        r2_threshold: float = 0.95,
+        r2_threshold: float = 0.90,
         l1_percentile: float = 20,
         mongo_uri: Optional[str] = None,
     ):
