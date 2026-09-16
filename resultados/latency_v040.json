@@ -1,0 +1,139 @@
+{
+  "medido_en": "2026-09-15T17:05:42.998303+00:00",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "torch": "2.11.0+cu128",
+  "kanrec": "0.4.0",
+  "batch": 4096,
+  "n_runs": 100,
+  "arquitectura": {
+    "encoder": "kan-bspline",
+    "num_numerical": 13,
+    "embedding_dim": 16,
+    "cat_cardinalities": [
+      1286,
+      539,
+      409063,
+      154193,
+      274,
+      17,
+      11142,
+      574,
+      4,
+      34056,
+      4852,
+      359766,
+      3098,
+      27,
+      9618,
+      275745,
+      11,
+      4104,
+      1871,
+      4,
+      324165,
+      17,
+      16,
+      48340,
+      72,
+      35114
+    ],
+    "grid_size": 10,
+    "spline_order": 3
+  },
+  "latencia": {
+    "raw": {
+      "batch_size": 4096,
+      "device": "cuda:0",
+      "n_runs": 100,
+      "full_ms_mean": 2.4047492499994405,
+      "full_ms_std": 0.24859140100147126,
+      "full_ms_p50": 2.3349379998762743,
+      "full_ms_p95": 3.017119798823842,
+      "encoder_ms_mean": 0.7354106400089222,
+      "encoder_ms_std": 0.09169961393675129,
+      "encoder_ms_p95": 0.8465943010378395,
+      "encoder_share": 0.30581593486684455,
+      "throughput_rows_per_s": 1703296.092098148
+    },
+    "raw-vec": {
+      "batch_size": 4096,
+      "device": "cuda:0",
+      "n_runs": 100,
+      "full_ms_mean": 1.4805803400486184,
+      "full_ms_std": 0.04348466136187419,
+      "full_ms_p50": 1.4673760006189696,
+      "full_ms_p95": 1.5663403511098295,
+      "encoder_ms_mean": 0.07620904008945217,
+      "encoder_ms_std": 0.005883424212881696,
+      "encoder_ms_p95": 0.09065119893421068,
+      "encoder_share": 0.051472411207992716,
+      "throughput_rows_per_s": 2766482.7697668187
+    },
+    "autodis": {
+      "batch_size": 4096,
+      "device": "cuda:0",
+      "n_runs": 100,
+      "full_ms_mean": 4.573885530062398,
+      "full_ms_std": 0.4104178365469819,
+      "full_ms_p50": 4.496556500271254,
+      "full_ms_p95": 4.831621200810332,
+      "encoder_ms_mean": 3.257928940001875,
+      "encoder_ms_std": 0.4539764768365862,
+      "encoder_ms_p95": 3.931018449384282,
+      "encoder_share": 0.7122891289230471,
+      "throughput_rows_per_s": 895518.6947899243
+    },
+    "kan-bspline": {
+      "batch_size": 4096,
+      "device": "cuda:0",
+      "n_runs": 100,
+      "full_ms_mean": 11.51685347997045,
+      "full_ms_std": 1.373142987869925,
+      "full_ms_p50": 11.222666000321624,
+      "full_ms_p95": 14.00259030024244,
+      "encoder_ms_mean": 9.533169689930219,
+      "encoder_ms_std": 1.1177547787643056,
+      "encoder_ms_p95": 11.070444349934405,
+      "encoder_share": 0.8277581812176253,
+      "throughput_rows_per_s": 355652.69690402533
+    },
+    "kan-vec": {
+      "batch_size": 4096,
+      "device": "cuda:0",
+      "n_runs": 100,
+      "full_ms_mean": 2.196576480037038,
+      "full_ms_std": 0.11842356084967451,
+      "full_ms_p50": 2.1634719996654894,
+      "full_ms_p95": 2.371637250234926,
+      "encoder_ms_mean": 0.9174390200496418,
+      "encoder_ms_std": 0.029691327408493874,
+      "encoder_ms_p95": 0.9561614999256562,
+      "encoder_share": 0.41766768805344406,
+      "throughput_rows_per_s": 1864719.957272298
+    }
+  },
+  "equivalencia": {
+    "raw-vec": {
+      "torch_equal": false,
+      "max_abs_diff": 3.814697265625e-06,
+      "claim": "idéntica hasta precisión de float32 (máx 3.8e-06)"
+    },
+    "kan-vec": {
+      "torch_equal": true,
+      "max_abs_diff": 0.0,
+      "claim": "idéntica bit a bit"
+    }
+  },
+  "resumen": {
+    "sobrecoste_kan_vs_raw_ambos_vectorizados": 1.4835915489495883,
+    "sobrecoste_kan_vec_vs_raw_sin_vectorizar": 0.9134326500102034,
+    "sobrecoste_kan_sin_vectorizar_vs_raw_vec": 7.778607596256659,
+    "aceleracion_modelo_por_vectorizar": 5.243092414326615,
+    "aceleracion_encoder_kan": 10.391066306962164,
+    "aceleracion_encoder_raw": 9.649913437378512,
+    "pct_tiempo_encoder_kan_antes": 82.77581812176254,
+    "pct_tiempo_encoder_kan_despues": 41.766768805344405,
+    "kan_vec_vs_autodis": 2.082279206588461
+  }
+}

@@ -1,0 +1,4 @@
+encoder,test_auc_mean,test_auc_std,test_logloss_mean,test_logloss_std,train_seconds_mean
+autodis,0.7816,0.0012,0.4651,0.0029,195.0204
+kan-bspline,0.7851,0.0015,0.4624,0.002,257.6285
+raw,0.7841,0.001,0.4631,0.0019,143.7057
