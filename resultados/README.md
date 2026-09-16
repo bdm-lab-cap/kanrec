@@ -14,7 +14,7 @@ sus tablas viven en el lakehouse.
 | `experiment_results_colab.csv` | 7.1 · Resultado 1 | Una fila por encoder y semilla: AUC y log-loss de test, épocas, tiempo y número de parámetros |
 | `experiment_summary_colab.csv` | 7.1 · Resultado 1 | Media y desviación por encoder sobre las tres semillas |
 | `gridsize_ablation_colab.csv` | 7.1 · Resultado 2 | Ablación de `grid_size` ∈ {5, 10, 20} sobre KAN-REC |
-| `symbolic_results.json` | 7.1 · Resultado 3 | Fórmula, operador, R² y acuerdo entre dimensiones de cada campo, por semilla |
+| `symbolic_results.json` | 6.5 · pipeline | Salida del notebook 05 en Fabric sobre el checkpoint entrenado en el pipeline: fórmula, operador, R² y acuerdo entre dimensiones por campo y semilla |
 | `estabilidad_semillas.csv` | 7.1 · Resultado 4 | Operador dominante por campo y en cuántas semillas se repite |
 | `fidelidad.csv` | 7.1 · Resultado 4 | Ablación por sustitución: error de curva y degradación de AUC, por semilla |
 | `monotonia.csv` | 7.2 | Tasa de violación de monotonía por campo, sobre las 16 dimensiones |
@@ -33,9 +33,13 @@ normalización directa gana en una de las tres.
 (0,7843), 5 pierde 0,0078 y 20 diverge (0,4277, por debajo del azar, deteniéndose
 a las 3 épocas).
 
-**Operadores.** En `symbolic_results.json`, el operador ganador es `linear` en
-todos los campos y en las tres semillas, con R² medio entre 0,960 y 0,998 y
-acuerdo entre las dieciséis dimensiones del embedding del 93,8 % al 100 %.
+**Operadores.** Las cifras del Resultado 3 (R² entre 0,919 y 0,998, acuerdo
+del 88 % al 100 %) provienen de la extracción sobre los checkpoints de Colab;
+la tabla por campo está en el Anexo D.3 y los datos por semilla en
+`estabilidad_semillas.csv`. `symbolic_results.json` es la extracción que el
+pipeline de Fabric ejecuta sobre su propio checkpoint (200.000 filas): otro
+modelo, mismo resultado cualitativo, `linear` en todos los campos y en las tres
+semillas.
 
 **Estabilidad.** En `estabilidad_semillas.csv`: 8 de 11 campos recuperan el
 operador idéntico en las tres semillas; la media ponderada es 90,9 %. Los tres
@@ -65,10 +69,9 @@ las operaciones en coma flotante.
 ## Nota sobre el número de campos
 
 La selección por norma L1 de los coeficientes spline retiene diez u once campos
-según la ejecución. `symbolic_results.json` recoge diez (sin I3) y
-`estabilidad_semillas.csv` once (con I3): I3 queda justo en el umbral del
-percentil 20. La conclusión no cambia, porque el operador es lineal en todos los
-casos.
+según el checkpoint: I3 e I12 quedan cerca del umbral del percentil 20 y entran
+o no dependiendo del modelo. La conclusión no cambia, porque el operador es
+lineal en todos los campos de todas las ejecuciones.
 
 ## Lo que no está aquí
 
