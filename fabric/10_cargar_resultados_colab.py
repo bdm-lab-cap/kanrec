@@ -1,36 +1,14 @@
-# ============================================================================
-# CARGA DE RESULTADOS DE COLAB COMO TABLAS DELTA
-# ============================================================================
-# Los resultados que van en la memoria proceden de Colab (3 semillas, 1,5M
-# filas, GPU), no del notebook trial de Fabric (1 semilla, 40k filas). Esta
-# celda los sube al lakehouse para que Power BI muestre EXACTAMENTE las cifras
-# que aparecen en la memoria, y no las del trial.
+# Microsoft Fabric Notebook — 10_cargar_resultados_colab
 #
-# Requisito previo: subir los CSV de kanrec_results/ (Drive de Colab) a
-# Files/results/ del lakehouse mediante el panel Files → Upload.
-# ---------------------------------------------------------------------------
-# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
+# Registra como tablas Delta los CSV de resultados producidos en Colab, de modo
+# que Power BI muestre las cifras de la memoria (3 semillas, 1,5 M de filas en
+# GPU) y no las de la corrida reducida de Fabric.
 #
-# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
-# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
-#   MagicUsageError: %pip magic command is disabled
+# Carga manual: no forma parte del pipeline. Requiere haber subido los CSV de
+# kanrec_results/ a Files/results/ del lakehouse.
 #
-# Por eso la primera celda de cada notebook NO instala nada. El paquete se
-# resuelve por una de estas dos vias, ambas compatibles con pipeline:
-#
-#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
-#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
-#
-#          import sys
-#          sys.path.insert(0, "/lakehouse/default/Files/libs")
-#
-#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
-#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
-#      Publicar -> asignar el entorno al workspace o al notebook.
-#
-# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
-# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
-# ---------------------------------------------------------------------------
+# Attach kanrec_lakehouse before running.
+
 from pyspark.sql import functions as F
 
 RESULTS_PATH = "Files/results"

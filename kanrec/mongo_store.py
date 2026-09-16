@@ -12,12 +12,9 @@ Schema:
 from datetime import datetime, timezone
 from typing import Optional
 
-# pymongo NO viene preinstalado en el runtime de Microsoft Fabric, a
-# diferencia de torch, scipy o pandas. Cuando el paquete se distribuye como
-# codigo en Files/libs (via sys.path) en lugar de instalarse, sus
-# dependencias no se resuelven, y un `ModuleNotFoundError: No module named
-# 'pymongo'` seco no dice al usuario que hacer. El import se difiere y se
-# acompana de instrucciones.
+# pymongo no viene preinstalado en el runtime de Microsoft Fabric, a
+# diferencia de torch, scipy o pandas. El import se difiere y se acompana de
+# instrucciones, en vez de fallar con un ModuleNotFoundError seco.
 try:
     from pymongo import ASCENDING, DESCENDING, MongoClient
     from pymongo.collection import Collection
@@ -30,12 +27,8 @@ except ModuleNotFoundError:  # pragma: no cover - depende del entorno
 
     _AYUDA = (
         "pymongo no esta disponible en este entorno.\n\n"
-        "En Microsoft Fabric no viene preinstalado. Dos opciones:\n"
-        "  1) Subir pymongo y bson a Files/libs/ junto a kanrec/:\n"
-        "       pip download pymongo --no-deps --only-binary=:all: \\\n"
-        "           --python-version 3.11 --platform manylinux2014_x86_64 -d ./pm\n"
-        "     y descomprimir el wheel en esa carpeta.\n"
-        "  2) Instalarlo en el entorno del workspace (mas lento de publicar).\n\n"
+        "En Microsoft Fabric no viene preinstalado: anadelo a las bibliotecas\n"
+        "publicas del entorno del workspace, junto al wheel de kanrec.\n\n"
         "El resto del paquete no lo necesita: solo la persistencia en Atlas."
     )
 
