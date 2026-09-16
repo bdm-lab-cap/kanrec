@@ -313,19 +313,11 @@ print(
 # ============================================================================
 # ABLACION POR SUSTITUCION — la metrica de fidelidad
 # ============================================================================
-# Reemplaza phi_j por su formula simbolica DENTRO del modelo (dejando intactas
-# las 26 categoricas, la interaccion y la cabeza) y mide el efecto. Es la
-# unica forma de validar la afirmacion de interpretabilidad: si sustituir la
-# formula apenas cambia el modelo, la formula describe fielmente lo que el
-# encoder hacia.
-#
-# Se reportan dos metricas y la que manda es la SEGUNDA:
-#   - delta AUC: cuanto se degrada la prediccion. Poco sensible en CTR,
-#     donde el AUC lo dominan las categoricas.
-#   - error de curva (relativo): cuanto se desvia la curva sustituida de la
-#     real. Es la medida directa de fidelidad de la formula. Se comprobo que
-#     discrimina: sobre una senal sin(1.5x) el campo con esa senal sale con
-#     error 0.58 mientras los demas quedan por debajo de 0.19.
+# Reemplaza phi_j por su formula dentro del modelo, dejando intactas las
+# categoricas, la interaccion y la cabeza, y mide el efecto. Se reportan dos
+# metricas y la principal es la segunda: el delta de AUC es poco sensible en
+# CTR, donde el AUC lo dominan las categoricas, mientras que el error relativo
+# de curva mide directamente la fidelidad de la formula.
 from kanrec.ablation import substitution_ablation
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -358,13 +350,8 @@ print("\nablation_report.json guardado en Files/results/")
 # ============================================================================
 # TABLAS DELTA PARA POWER BI
 # ============================================================================
-# powerbi/README.md documenta cinco tablas, de las que solo existian dos
-# (experiment_results y streaming_processed). Las tres que faltaban se escriben
-# aqui, de modo que el panel sea reproducible en lugar de construirse a mano:
-#
 #   symbolic_results  — una fila por campo y semilla, con operador y metricas
 #   spline_curves     — el grid evaluado de cada curva phi, para graficarla
-#                       en Direct Lake (el visual mas ilustrativo del trabajo)
 #   baseline_metrics  — resumen por encoder para la pagina comparativa
 import pandas as pd
 from pyspark.sql import functions as F

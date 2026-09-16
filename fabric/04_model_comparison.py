@@ -67,8 +67,8 @@ from pyspark.sql import functions as F
 
 # Refrescar cache de metadatos antes de leer: si 01 reescribio las tablas en
 # la misma capacidad, esta sesion podia seguir viendo la version anterior sin
-# normalizar y entrenar sobre datos crudos (ver 04_model_comparison_trial.py
-# para el detalle del fallo). Guardia dura si I6..I13 no estan normalizadas.
+# normalizar y entrenar sobre datos crudos.
+# Guardia dura si I6..I13 no estan normalizadas.
 for _t in ("train", "val", "test"):
     spark.catalog.refreshTable(_t)
 STD_CHECK = [f"I{i}" for i in range(6, 14)]
@@ -207,7 +207,7 @@ def train_one_run(
     # Se hace SIEMPRE sobre datos normalizados (celda 01 ya garantiza esto),
     # con una muestra generosa para cubrir bien la distribucion de cada campo.
     if hasattr(model, "calibrate"):
-        # 50k filas, no 5 lotes fijos (verificado tras la primera
+        # 50k filas, no 5 lotes fijos (tras la primera
         # corrida real en Fabric: I6 e I12 llegan a ~690 desviaciones tipicas
         # en Criteo -- colas extremas). Con solo ~5k-10k filas de muestra la
         # probabilidad de capturar esos outliers era baja, y el grid
@@ -367,13 +367,9 @@ for r in results:
 # ============================================================================
 # CELDA 7 (opcional) — Ablacion ligera de grid_size, solo KAN-REC
 # ============================================================================
-# Ablacion de grid_size. Si 5 (el valor por defecto de efficient-kan) es
-# notablemente peor que 10 o 20 ahora que el grid si se calibra, la capacidad
-# del spline importa una vez que el rango es el correcto.
-# Los tres valores se entrenan con el mismo presupuesto (15 epocas, paciencia
-# 2) para que la ablacion sea comparable entre si. Los checkpoints llevan
-# sufijo "_abl" para no pisar los de la comparativa principal, que son los que
-# cargan 05 y 06.
+# Los tres valores se entrenan con el mismo presupuesto para que la ablacion
+# sea comparable. Los checkpoints llevan sufijo "_abl" para no pisar los de la
+# comparativa principal, que son los que cargan 05 y 06.
 ablation_results = []
 for grid_size in [5, 10, 20]:
     r = train_one_run("kan-bspline", seed=42, grid_size=grid_size, max_epochs=15, patience=2,

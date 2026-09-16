@@ -94,7 +94,7 @@ class KANNumericalEncoder(nn.Module):
         Returns:
             embeddings: [batch, num_fields, embedding_dim]
         """
-        # Winsorizado de la entrada (verificado en la corrida real de
+        # Winsorizado de la entrada (medido en la corrida de
         # Colab): tras StandardScaler, Criteo conserva outliers de hasta ~690
         # desviaciones tipicas en I6/I12. La ruta base del KAN es
         # base_weight * SiLU(x), y SiLU(690) ~= 690, asi que un solo outlier

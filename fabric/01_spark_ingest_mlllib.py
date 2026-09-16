@@ -58,14 +58,10 @@ except ImportError:
     pass  # fuera de Fabric (tests locales)
 
 print("Loading Criteo...")
-# Esquema explicito en vez de inferSchema=true. Motivos:
-#   - inferSchema fuerza una pasada completa extra sobre los 2.26 GB solo
-#     para deducir tipos (mas lento; mala practica en Spark a esta escala).
-#   - inferSchema + modo FAILFAST (el default) aborta el job entero con
-#     "MALFORMED_RECORD_IN_PARSING" en cuanto una fila no encaja con el tipo
-#     deducido, y Criteo (10M filas) tiene filas irregulares. Con el esquema
-#     declarado y mode=PERMISSIVE, esas celdas se leen como null (que el
-#     bloque de imputacion de abajo ya convierte a 0.0) en vez de reventar.
+# Esquema explicito en vez de inferSchema: evita una pasada extra sobre los
+# 2,26 GB y, sobre todo, que el modo FAILFAST aborte el job ante la primera
+# fila irregular. Con el esquema declarado y mode=PERMISSIVE esas celdas se
+# leen como null y la imputacion de abajo las convierte a 0.0.
 from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType, StringType
 
 schema = StructType(
@@ -91,14 +87,10 @@ for c in NUMERICAL_COLS:
     raw = raw.withColumn(c, F.when(F.col(c).isNull(), 0.0)
                            .otherwise(F.abs(F.col(c))))
 
-# CLAVE: materializar 'raw' a una tabla Delta ANTES de cualquier split o
-# pipeline. El CSV de Criteo provoca "MALFORMED_RECORD_IN_PARSING
-# [null,null,null]" al reparsearse en ciertas particiones durante el
-# saveAsTable final (randomSplit reordena las particiones, forzando a Spark
-# a reparsear el TSV en trozos que un count() no toca). Una vez los datos
-# estan en Delta, no hay reparseo de CSV posible aguas abajo: split,
-# pipeline y escrituras leen todos de Delta. Es un arreglo estructural,
-# no un parche sobre el sintoma.
+# Materializar 'raw' a Delta antes de cualquier split: randomSplit reordena
+# las particiones y fuerza a Spark a reparsear el TSV en trozos que un count()
+# no toca, lo que aborta con MALFORMED_RECORD_IN_PARSING. Con los datos ya en
+# Delta, nada aguas abajo vuelve a parsear CSV.
 print("Materializing raw to Delta (avoids CSV re-parsing downstream)...")
 raw.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("_raw_ingested")
 raw = spark.read.table("_raw_ingested")
@@ -139,15 +131,12 @@ def apply_scaler(df):
     return _apply_scaler(df, scaler_stats, STD_COLS)
 
 # ── Indexado categorico (nativo, join broadcast) ────────────────────────────
-# NO se usa StringIndexer: su serializador interno de metadatos parsea como
-# CSV en modo FAILFAST y aborta con "MALFORMED_RECORD_IN_PARSING
-# [null,null,null]" cuando un valor categorico contiene caracteres que
-# parecen un registro CSV malformado (comillas, comas) -- frecuente en los
-# hashes de Criteo. El StringIndexer era la etapa exacta que
-# fallaba (PASO C del diagnostico). El indexado nativo por frecuencia
-# descendente (empate alfabetico ascendente) es equivalente funcional y no
-# tiene ese parser. El mapa se ajusta sobre TRAIN; categorias no vistas en
-# val/test y nulos van al indice len(categorias) (como handleInvalid="keep").
+# No se usa StringIndexer: su serializador de metadatos parsea como CSV en
+# modo FAILFAST y aborta con valores que contienen comillas o comas, frecuentes
+# entre los hashes de Criteo. El indexado nativo por frecuencia descendente
+# (desempate alfabetico) es equivalente y no tiene ese parser. El mapa se
+# ajusta sobre train; las categorias no vistas y los nulos van al indice
+# len(categorias), como handleInvalid="keep".
 from pyspark.sql import Window
 
 def build_index_map(train_df, col):
@@ -167,7 +156,7 @@ def apply_scaler_and_index(df, name):
     Aplica el scaler y los 26 indexados categoricos, MATERIALIZANDO cada
     CHUNK columnas.
 
-    Por que se materializa por bloques (verificado con df.explain sobre el
+    Por que se materializa por bloques (con df.explain sobre el
     plan real en Fabric): encadenar los 26 broadcast joins en un unico plan
     genera un arbol enorme -- cada join arrastra su propio FileScan de
     _raw_ingested mas un Sort con Exchange SinglePartition. El motor aborta
@@ -222,29 +211,19 @@ for c in CATEGORICAL_COLS:
 _index_rows.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("cat_index_maps")
 print("Saved cat_index_maps table (para reindexar el stream igual que el batch).")
 
-# Escritura como TABLA GESTIONADA del catalogo (saveAsTable), NO por ruta
-# (.save("Tables/train")). En Fabric, .save() a una ruta escribe los ficheros
-# Delta pero NO siempre actualiza la entrada del catalogo que consulta
-# spark.read.table("train"): el resultado era que 01 escribia los datos
-# normalizados en disco mientras la TABLA 'train' del catalogo seguia
-# apuntando a una version anterior con datos crudos (el historial
-# Delta mostraba escrituras de dias atras pese a reejecutar 01). saveAsTable
-# con overwrite reemplaza la tabla del catalogo, asi que 04/05/diagnostico,
-# que leen por nombre, ven de verdad la version nueva.
+# saveAsTable y no .save("Tables/train"): escribir por ruta actualiza los
+# ficheros Delta pero no siempre la entrada del catalogo, de modo que
+# spark.read.table("train") podia seguir devolviendo una version anterior sin
+# normalizar. Los notebooks aguas abajo leen por nombre.
 train_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("train")
 val_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("val")
 test_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("test")
 print(f"TRAIN: {train_t.count():,} | VAL: {val_t.count():,} | TEST: {test_t.count():,}")
 
 # ── Verificacion ───────────────────────────────────────────────────────────
-# CLAVE: se lee de vuelta la TABLA ESCRITA EN DISCO, no train_t en memoria.
-# La verificacion se hace sobre la tabla releida, no sobre el DataFrame en
-# memoria: si la escritura fuese a otro sitio o fallase en silencio, la
-# comprobacion
-# no lo detectaba -- y el modelo acababa entrenando sobre una tabla vieja
-# sin normalizar (rango I6 hasta ~230000 en vez de ~[-3,3]).
-# Refrescar la cache del catalogo antes de releer, para que la verificacion
-# lea la version que ACABAMOS de escribir y no una cacheada de esta sesion.
+# Se verifica la tabla releida del catalogo, no el DataFrame en memoria: si la
+# escritura fallara en silencio, comprobar la memoria no lo detectaria. Se
+# refresca la cache antes para no leer una version cacheada de esta sesion.
 spark.catalog.refreshTable("train")
 written = spark.read.table("train")
 
@@ -297,14 +276,11 @@ print("Done.")
 # ============================================================================
 # CELDA 4 (opcional) — Exportar una muestra para Colab
 # ============================================================================
-# Por que existe esta celda: la capacidad trial de Fabric NO admite cola de
-# trabajos (un pico de uso se rechaza al momento con 430, no espera) y la
-# sesion de Spark se desaloja tras 20 min de inactividad. La comparativa
-# completa de encoders (3 semillas x 3 modelos + ablacion de grid_size) se
-# ejecuta por eso en Google Colab Pro (GPU, sin este limite), sobre esta
-# MISMA muestra ya normalizada por el pipeline de Fabric — no sobre datos
-# reprocesados aparte, para que ambos entornos vean exactamente los mismos
-# valores. Ver notebook de Colab: colab/kanrec_full_comparison.ipynb
+# La capacidad de prueba de Fabric no encola trabajos (los rechaza con 430) y
+# desaloja la sesion tras 20 min de inactividad, asi que la comparativa
+# completa se ejecuta en Colab con GPU. Se exporta esta muestra ya normalizada
+# por el pipeline, no datos reprocesados aparte, para que ambos entornos vean
+# los mismos valores. Ver colab/kanrec_full_comparison.ipynb.
 from kanrec.spark_utils import random_sample
 
 N_EXPORT_TRAIN, N_EXPORT_VAL, N_EXPORT_TEST = 500_000, 100_000, 100_000

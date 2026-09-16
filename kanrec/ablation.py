@@ -179,7 +179,7 @@ def substitution_ablation(model, test_loader, symbolic_results: dict,
         # dimensiones del embedding. Es la medida DIRECTA de fidelidad de la
         # formula, y es mas sensible que el delta de AUC: en CTR el AUC
         # depende sobre todo de las categoricas, asi que puede moverse poco
-        # aunque la forma de phi cambie mucho (verificado: senal curva da
+        # aunque la forma de phi cambie mucho (una senal curva da
         # error de curva 0.58 frente a 0.16 en el caso lineal, mientras el
         # delta de AUC apenas distingue ambos casos).
         x_grid, curves = model.numerical_encoder.get_spline_curves(j)
@@ -242,7 +242,7 @@ def substitution_ablation(model, test_loader, symbolic_results: dict,
 
         # El veredicto se basa en el error de CURVA, no en el delta de AUC:
         # en CTR el AUC lo dominan las categoricas y es poco sensible a la
-        # forma de phi (verificado empiricamente).
+        # forma de phi.
         err = report["curve_rel_error_mean"]
         print()
         if err < 0.20:

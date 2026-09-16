@@ -151,7 +151,7 @@ def build_model(
     InteractionMLP backbone and head via CTRModel.
 
     Antes, el flag --encoder solo cambiaba el nombre del checkpoint porque
-    todas las ramas construian un KANRecModel. Aqui selecciona de verdad el
+    todas las ramas construian un KANRecModel. Aqui selecciona el
     encoder numerico, de modo que tres corridas son tres modelos distintos y
     no el mismo guardado con tres nombres.
 

@@ -163,7 +163,7 @@ class KANRecModel(CTRModel):
         # for the fix to the bug that made this always contribute zero
         #.
         #
-        # 1e-5, not 1e-3 (verificado empiricamente): at 1e-3 the penalty
+        # 1e-5, not 1e-3: at 1e-3 the penalty
         # crushes the spline path. Measured on a synthetic sin(2.5x) signal,
         # |base_weight| / |spline_weight| after 40 epochs was 63x at 1e-3
         # versus 16x at 1e-5 -- i.e. the regulariser was suppressing the
