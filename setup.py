@@ -76,7 +76,6 @@ setup(
         ],
         "streaming": ["confluent-kafka>=2.3.0"],
         "api":       ["fastapi>=0.110.0", "uvicorn>=0.29.0"],
-        "dashboard": ["streamlit>=1.32.0", "plotly>=5.20.0"],
         "spark":     ["pyspark>=3.5.0"],
     },
 )
