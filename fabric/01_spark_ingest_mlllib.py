@@ -1,38 +1,25 @@
 # Microsoft Fabric Notebook — 01_spark_ingest_mlllib
-# Attach kanrec_lakehouse before running.
 #
-# Requires the kanrec package installed in this session (first cell of
-# every notebook in this project):
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# Ingesta y normalizacion del TSV de Criteo (10 M de filas, 2,26 GB) y
+# escritura de los conjuntos train / val / test en el lakehouse, junto con
+# los artefactos que el resto del pipeline necesita para aplicar la misma
+# transformacion: los estadisticos del escalador y los mapas de indexado
+# categorico.
 #
-# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): este
-# notebook NUNCA llama a mlflow ni lo instala aparte, pero rompia igual
-# con "wrapper() got an unexpected keyword argument 'expected_status'".
-# Causa: kanrec<0.3.2 declaraba mlflow como dependencia obligatoria, asi
-# que %pip install kanrec instalaba de forma TRANSITIVA un mlflow de PyPI
-# sin fijar, que sobreescribe el mlflow propio que Fabric ya trae
-# integrado con su plugin synapse.ml.mlflow. Fabric registra
-# automaticamente CADA ejecucion de notebook en su propio tracking de
-# experimentos (via synapse.ml.mlflow.default_experiment_registry), de
-# forma transparente -- por eso el fallo aparecia aunque este notebook no
-# use mlflow para nada. kanrec>=0.3.2 ya no arrastra mlflow (paso a un
-# extra [train], solo para entrenamiento local/Colab). Si tras el fix
-# sigue fallando, reinicia el kernel de PySpark: el mlflow incompatible
-# puede haber quedado instalado en el entorno pip aislado de la sesion
-# anterior y un simple re-run de la celda no lo revierte.
+# Attach kanrec_lakehouse before running. El paquete kanrec se resuelve
+# desde el entorno del workspace: %pip esta deshabilitado en ejecucion por
+# pipeline.
 #
-# Corregido en la revisión de septiembre de 2026
-# --------------------------------------------------------------
-# StandardScaler used to write its output into a NEW vector column
-# ("num_scaled") that no downstream notebook ever read: every training
-# notebook loaded I1..I13 straight from the Delta table, where I6-I13
-# were still in their raw (unnormalised) scale. The fix unpacks the
-# scaled vector back into the I6..I13 scalar columns themselves, so the
-# Delta table that everything downstream reads is the normalised one.
+# Salidas
+#   Tables/train, Tables/val, Tables/test
+#   Tables/cat_index_maps
+#   Files/config/scaler_stats.json
+#   Files/config/feature_selection.json
 #
-# A `describe()` call at the end proves it: I6..I13 must show mean ~0.0
-# and stddev ~1.0 in the printed summary. Keep that output for the
-# memoria's Anexo D (evidence that the pipeline does what it claims).
+# La estandarizacion se escribe de vuelta sobre las columnas I6..I13, no en
+# una columna vectorial aparte: es la tabla Delta lo que leen los notebooks
+# de entrenamiento, asi que la normalizacion tiene que estar ahi. El
+# describe() final lo verifica (media ~0, desviacion ~1) y aborta si no.
 
 import json, os
 import numpy as np
@@ -45,17 +32,10 @@ STD_COLS = [f"I{i}" for i in range(6, 14)]  # StandardScaler (magnitud libre)
 
 # Limpiar artefactos de ejecuciones anteriores antes de regenerar.
 #
-# CAUSA RAIZ del fallo que costo varias ejecuciones (verificado): borrar solo
-# los ficheros con notebookutils.fs.rm deja la ENTRADA DEL CATALOGO apuntando
-# a una ruta que ya no existe. Esa entrada huerfana hace que el siguiente
-# saveAsTable aborte con "MALFORMED_RECORD_IN_PARSING [null,null,null] /
-# Parse Mode: FAILFAST" -- un mensaje enganoso, porque en ese punto no hay
-# ningun parseo de texto (los datos vienen de Delta/Parquet).
-#
-# Hay que hacer las DOS cosas y en este orden: DROP TABLE (catalogo) y
-# despues fs.rm (ficheros). Descartadas por el camino, con evidencia, estas
-# otras hipotesis: el TSV, el reparseo de CSV, el StringIndexer, el
-# PipelineModel serializado, el tamano del plan y la cache de metadatos.
+# El orden importa: primero DROP TABLE (catalogo) y despues fs.rm (ficheros).
+# Borrar solo los ficheros deja una entrada de catalogo apuntando a una ruta
+# inexistente, y el siguiente saveAsTable aborta con un
+# MALFORMED_RECORD_IN_PARSING que no tiene nada que ver con el parseo.
 try:
     import notebookutils
 
@@ -163,7 +143,7 @@ def apply_scaler(df):
 # CSV en modo FAILFAST y aborta con "MALFORMED_RECORD_IN_PARSING
 # [null,null,null]" cuando un valor categorico contiene caracteres que
 # parecen un registro CSV malformado (comillas, comas) -- frecuente en los
-# hashes de Criteo. Verificado: el StringIndexer era la etapa exacta que
+# hashes de Criteo. El StringIndexer era la etapa exacta que
 # fallaba (PASO C del diagnostico). El indexado nativo por frecuencia
 # descendente (empate alfabetico ascendente) es equivalente funcional y no
 # tiene ese parser. El mapa se ajusta sobre TRAIN; categorias no vistas en
@@ -247,7 +227,7 @@ print("Saved cat_index_maps table (para reindexar el stream igual que el batch).
 # Delta pero NO siempre actualiza la entrada del catalogo que consulta
 # spark.read.table("train"): el resultado era que 01 escribia los datos
 # normalizados en disco mientras la TABLA 'train' del catalogo seguia
-# apuntando a una version anterior con datos crudos (verificado: el historial
+# apuntando a una version anterior con datos crudos (el historial
 # Delta mostraba escrituras de dias atras pese a reejecutar 01). saveAsTable
 # con overwrite reemplaza la tabla del catalogo, asi que 04/05/diagnostico,
 # que leen por nombre, ven de verdad la version nueva.
@@ -256,10 +236,11 @@ val_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").
 test_t.write.format("delta").mode("overwrite").option("overwriteSchema", "true").saveAsTable("test")
 print(f"TRAIN: {train_t.count():,} | VAL: {val_t.count():,} | TEST: {test_t.count():,}")
 
-# ── Verificacion (guardar esta salida para el Anexo D) ─────────────────────
+# ── Verificacion ───────────────────────────────────────────────────────────
 # CLAVE: se lee de vuelta la TABLA ESCRITA EN DISCO, no train_t en memoria.
-# Antes se verificaba train_t (el DataFrame en memoria), asi que si la
-# escritura Delta iba a otro sitio o fallaba en silencio, la verificacion
+# La verificacion se hace sobre la tabla releida, no sobre el DataFrame en
+# memoria: si la escritura fuese a otro sitio o fallase en silencio, la
+# comprobacion
 # no lo detectaba -- y el modelo acababa entrenando sobre una tabla vieja
 # sin normalizar (rango I6 hasta ~230000 en vez de ~[-3,3]).
 # Refrescar la cache del catalogo antes de releer, para que la verificacion

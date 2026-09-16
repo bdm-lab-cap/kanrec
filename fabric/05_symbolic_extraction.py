@@ -1,35 +1,26 @@
 # Microsoft Fabric Notebook — 05_symbolic_extraction
-# Extracts symbolic scoring rules from trained KAN-REC models.
+#
+# Extrae una descripcion simbolica de cada campo numerico a partir del
+# encoder entrenado: ajusta la curva phi_j aprendida a una libreria de
+# operadores elementales y reporta el operador dominante, el R2 del ajuste y
+# el grado de acuerdo entre las dimensiones del embedding.
+#
 # Run AFTER 04_model_comparison. Attach kanrec_lakehouse before running.
 #
-# Requiere el paquete kanrec instalado en esta sesion:
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# El modelo se reconstruye importando kanrec.model.KANRecModel, la misma
+# definicion que entrena 04: una definicion local con otra arquitectura de
+# interaccion no podria cargar los checkpoints reales. Las curvas se evaluan
+# sobre el grid calibrado de cada campo, que viaja dentro del checkpoint como
+# buffer de PyTorch, y no sobre una ventana fija.
 #
-# Correcciones aplicadas en la revisión:
+# La formula describe la funcion de codificacion del campo, no la funcion de
+# scoring completa: el scoring pasa ademas por las categoricas, la capa de
+# interaccion y la cabeza. La fidelidad se mide sustituyendo phi_j dentro del
+# modelo (kanrec.faithfulness).
 #
-#   B5 — Este notebook redefinia KANNumericalEncoder/KANRecModel de forma
-#        LOCAL, con una arquitectura de interaccion distinta a la que de
-#        verdad entrenaron los notebooks de entrenamiento. Como resultado,
-#        load_state_dict() lanzaba una excepcion de claves incompatibles
-#        contra los checkpoints reales — este script, tal como estaba, no
-#        podia ejecutarse contra los resultados reales del TFM.
-#        Ahora se importa `from kanrec.model import KANRecModel`: una unica
-#        definicion, la misma que entrena 04_model_comparison.
-#
-#   A3 — get_spline_curves evaluaba siempre en [-3, 3], una ventana fija
-#        que para casi todos los campos cae fuera del rango donde el
-#        grid del spline esta activo. Como el buffer `grid` de cada KAN se
-#        guarda dentro del checkpoint (es un buffer registrado de PyTorch),
-#        cargar el checkpoint restaura tambien la calibracion — y
-#        get_spline_curves (ya corregido en el paquete) evalua sobre esa
-#        misma calibracion, no sobre una ventana arbitraria.
-#
-#   (pendiente, fuera del alcance de este paso — la revisión): la formula
-#   ajustada aqui describe UNA de las `embedding_dim` dimensiones del
-#   embedding del campo, no la funcion de scoring completa. Este notebook
-#   sigue documentando eso mismo mas abajo; la metrica de fidelidad
-#   (sustituir phi_j dentro del modelo y medir la caida de AUC) es tarea
-#   del siguiente paso (interpretabilidad), no de este.
+# Salidas
+#   Files/results/symbolic_results.json
+#   Tables/symbolic_results, Tables/spline_curves, Tables/baseline_metrics
 
 import json, os
 import numpy as np
@@ -45,9 +36,8 @@ with open("/lakehouse/default/Files/config/feature_selection.json") as f:
 NUMERICAL_COLS   = sel["selected"]
 CATEGORICAL_COLS = [f"C{i}" for i in range(1, 27)]
 
-# Grid size usado en la comparativa principal (04_model_comparison, CELDA 4
-# la deja en su valor por defecto = 10). Si cambias el default alli, cambia
-# tambien aqui: el buffer `grid` que se restaura al cargar el checkpoint
+# Grid size de la comparativa principal (valor por defecto de 04). El buffer
+# `grid` que se restaura al cargar el checkpoint
 # tiene una forma que depende de grid_size, asi que hay que instanciar el
 # modelo con el MISMO grid_size antes de cargar los pesos.
 KAN_GRID_SIZE = 10
@@ -333,7 +323,7 @@ print(
 #   - delta AUC: cuanto se degrada la prediccion. Poco sensible en CTR,
 #     donde el AUC lo dominan las categoricas.
 #   - error de curva (relativo): cuanto se desvia la curva sustituida de la
-#     real. Es la medida directa de fidelidad de la formula. Verificado que
+#     real. Es la medida directa de fidelidad de la formula. Se comprobo que
 #     discrimina: sobre una senal sin(1.5x) el campo con esa senal sale con
 #     error 0.58 mientras los demas quedan por debajo de 0.19.
 from kanrec.ablation import substitution_ablation

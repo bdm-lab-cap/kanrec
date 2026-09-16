@@ -1,53 +1,31 @@
 # Microsoft Fabric Notebook — 04_model_comparison
-# SUSTITUYE a los antiguos 04_training_kanrec, 07_autodis_baseline y
-# 08_comparativa_encoders, que quedan eliminados del repositorio.
 #
-# Motivo de la consolidacion:
-#   - Los tres definian KANRecModel por su cuenta, con arquitecturas que no
-#     coincidian entre si ni con el paquete instalable.
-#   - 04 calculaba las cardinalidades categoricas sobre train/val/test
-#     completos; 07 y 08 las calculaban sobre una muestra de 100k filas
-#     distinta. Los tres encoders no veian la misma resolucion categorica.
-#   - train.py --encoder no tenia efecto real: las tres ramas construian
-#     KANRecModel sin importar el flag.
-# Aqui hay UNA sola definicion de modelo (kanrec.baselines.build_model),
-# UNA sola forma de calcular cardinalidades, y los tres encoders comparten
-# exactamente el mismo backbone de interaccion — asi que la unica variable
-# entre ellos es, de verdad, el encoder numerico.
+# Comparativa de los tres encoders numericos —normalizacion directa, AutoDis
+# y KAN-REC— sobre el mismo backbone, los mismos datos y las mismas semillas,
+# de modo que la unica variable entre ellos sea el encoder. Incluye la
+# ablacion de grid_size y escribe los checkpoints con su manifiesto.
 #
-# Correcciones aplicadas en este notebook:
-#   A2  — lee Tables/train ya normalizado por 01 (StandardScaler llega
-#         de verdad a I6..I13).
-#   A3  — calibra el grid de las B-splines a la distribucion real de cada
-#         campo antes de entrenar (kanrec.encoder.calibrate).
-#   A4  — muestreo aleatorio real (kanrec.spark_utils.random_sample) en
-#         vez de .limit() por separado sobre positivos/negativos, que no
-#         es un muestreo aleatorio y contaminaba con senal temporal.
-#         Se abandona el balanceo artificial 50/50: se entrena sobre la
-#         distribucion natural del CTR, que es lo que hace comparable el
-#         AUC con la literatura publicada (DeepFM, DCNv2, AutoInt ~0.80-0.815).
-#   A5  — AutoDis sin el sigmoid antes del softmax (kanrec.baselines).
-#   A6  — regularizacion de entropia > 0 de verdad (kanrec.encoder).
+# Sustituye a los antiguos 04_training_kanrec, 07_autodis_baseline y
+# 08_comparativa_encoders, que definian el modelo por su cuenta con
+# arquitecturas que no coincidian entre si ni con el paquete instalable, y
+# que calculaban las cardinalidades categoricas sobre muestras distintas.
+# Aqui hay una sola definicion de modelo (kanrec.baselines.build_model) y
+# una sola forma de calcular cardinalidades.
 #
-# Requiere el paquete kanrec instalado en esta sesion:
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
+# Run AFTER 01_spark_ingest. Attach kanrec_lakehouse before running.
 #
-# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
-# mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
-# propio, integrado con su plugin synapse.ml.mlflow. Si se instala OTRO
-# mlflow (via pip, o transitivamente al instalar kanrec en versiones
-# anteriores a la 0.3.2), el plugin de Fabric se rompe con:
-#   "wrapper() got an unexpected keyword argument 'expected_status'"
-# kanrec>=0.3.2 ya NO trae mlflow como dependencia obligatoria por esto
-# mismo. scikit-learn si viene con kanrec, no hace falta instalarlo aparte.
+# Salidas
+#   Files/checkpoints/best_<encoder>_gs10_s<seed>.pt (+ .manifest.json)
+#   Tables/experiment_results, Tables/gridsize_ablation
+#
+# No instalar mlflow ni scikit-learn en este notebook: Fabric trae su propio
+# mlflow integrado con el plugin synapse.ml.mlflow, y una segunda instalacion
+# lo rompe. Por eso kanrec declara mlflow en el extra [train] y no como
+# dependencia obligatoria.
 
 # ============================================================================
-# CELDA 1 — Instalacion e imports
+# CELDA 1 — Imports
 # ============================================================================
-# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
-# NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
-# los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
-
 import json
 import os
 import time
@@ -181,14 +159,12 @@ test_loader  = DataLoader(test_ds,  batch_size=BATCH_SIZE, shuffle=False, num_wo
 # ============================================================================
 # CELDA 4 — Entrenamiento de una configuracion (encoder, seed)
 # ============================================================================
-# Learning rate por encoder, no unico para los tres.
-# Hallazgo empirico (verificado con datos sinteticos antes de entregar este
-# notebook): con lr=1e-3 igual para los tres, AutoDis queda claramente
-# infraentrenado incluso a 30 epocas (AUC ~0.57 vs ~0.78 con lr=1e-2 en el
-# mismo presupuesto de epocas), mientras que raw y kan-bspline son estables
-# en ambos valores. Usar el mismo lr para los tres "por simetria" no es mas
-# justo: es forzar una desventaja estructural a la arquitectura con mas
-# parametros en su capa de discretizacion (proyeccion + skip + temperatura).
+# Learning rate por encoder, no unico para los tres. Con lr=1e-3 para todos,
+# AutoDis queda infraentrenado incluso a 30 epocas (AUC ~0.57 frente a ~0.78
+# con lr=1e-2 en el mismo presupuesto), mientras que raw y kan-bspline son
+# estables en ambos valores. Igualar el lr "por simetria" no es mas justo:
+# penaliza estructuralmente a la arquitectura con mas parametros en su capa
+# de discretizacion (proyeccion + skip + temperatura).
 # Lo que debe ser igual entre encoders son los DATOS y la evaluacion, no
 # necesariamente el learning rate.
 DEFAULT_LR = {"raw": 1e-3, "autodis": 1e-2, "kan-bspline": 1e-3}

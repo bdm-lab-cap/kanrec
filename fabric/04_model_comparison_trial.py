@@ -1,88 +1,11 @@
-# Microsoft Fabric Notebook — 04_model_comparison_TRIAL
+# Microsoft Fabric Notebook — 04_model_comparison_trial
 #
-# Version ajustada a las limitaciones de la capacidad TRIAL de Fabric.
-# NO es la fuente de las cifras finales de la memoria: es la prueba de que
-# el pipeline completo (Spark MLlib -> KAN-REC -> MLflow -> Delta) funciona
-# de principio a fin en la plataforma real, con datos y entrenamiento reales
-# (no un mock), a una escala que cabe con seguridad en la trial.
+# Variante reducida de 04_model_comparison para capacidad de prueba: mismo
+# codigo y misma comparativa, con menos filas y menos epocas. Las cifras que
+# se reportan en la memoria salen de la ejecucion completa, no de esta.
 #
-# La comparativa ESTADISTICAMENTE ROBUSTA (3 encoders x 3 semillas + ablacion
-# de grid_size) se ejecuta en Google Colab Pro sobre la MISMA muestra que
-# exporta la Celda 4 de 01_spark_ingest_mlllib — ver colab/kanrec_full_comparison.ipynb.
-#
-# Por que se reduce el alcance aqui, con datos concretos:
-#   - La capacidad trial NO admite cola de trabajos: un pico de uso se
-#     rechaza al momento con 430 TooManyRequestsForCapacity, no espera
-#     (a diferencia de una capacidad de pago). No hay margen para que un
-#     bucle largo se recupere de un fallo transitorio.
-#   - La sesion de Spark se desaloja tras 20 min de inactividad, y el
-#     arranque en frio tarda 3-8 min. Un bucle desatendido de 9
-#     entrenamientos + ablacion es exactamente el tipo de ejecucion larga
-#     que puede chocar con esto.
-#   - La documentacion de la comunidad de Fabric recomienda explicitamente,
-#     para capacidades trial, usar un pool PEQUENO en vez del Starter Pool
-#     por defecto.
-#
-# Que SI demuestra este notebook, y que cuenta para el criterio 1 del
-# concurso (aplicacion de tecnicas del master):
-#   - El pipeline de Spark MLlib (01) alimentando de verdad al entrenamiento.
-#   - Las 3 arquitecturas (raw/AutoDis/KAN-REC) entrenando y evaluando en
-#     Fabric mismo, con MLflow registrando los runs.
-#   - Una tabla experiment_results real en Delta, consumible por Power BI.
-#   - Higiene de sesion explicita (spark.stop() al final), que es la
-#     practica recomendada precisamente para no agotar el cupo del trial.
-#
-# Requiere el paquete kanrec instalado en esta sesion, FIJADO al mismo
-# commit que usa el notebook de Colab (para que ambos entornos ejecuten
-# exactamente el mismo codigo):
-#   %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
-#
-# IMPORTANTE (fallo real, verificado en Fabric el 2026-09-09): NO instales
-# mlflow ni scikit-learn por separado aqui. Fabric ya trae un mlflow
-# propio, integrado con su plugin synapse.ml.mlflow. Si se instala OTRO
-# mlflow (via pip, o transitivamente al instalar kanrec en versiones
-# anteriores a la 0.3.2), el plugin de Fabric se rompe con:
-#   "wrapper() got an unexpected keyword argument 'expected_status'"
-# kanrec>=0.3.2 ya NO trae mlflow como dependencia obligatoria por esto
-# mismo. scikit-learn si viene con kanrec, no hace falta instalarlo aparte.
-# (Se usa @main temporalmente: repinear al commit exacto tras hacer
-#  push de este arreglo -- ver "Pasos a seguir".)
+# Run AFTER 01_spark_ingest. Attach kanrec_lakehouse before running.
 
-# ============================================================================
-# CELDA 1 — Configuracion de sesion + instalacion + imports
-# ============================================================================
-# Antes de nada: usa un pool PEQUENO, no el Starter Pool por defecto.
-# En el workspace: Configuracion -> Data Engineering/Science -> Spark
-# Settings -> Pool -> elige un pool "Small" (o crea uno de 4 vCores).
-# Esto es lo que la comunidad de Fabric recomienda para capacidades trial.
-
-# %pip install --quiet "git+https://github.com/bdm-lab-cap/kanrec.git@main"
-# NO instales mlflow ni scikit-learn aqui -- ver nota arriba. Fabric ya
-# los trae, y reinstalarlos rompe el plugin de mlflow propio de Fabric.
-
-# ---------------------------------------------------------------------------
-# IMPORTANTE — instalacion de kanrec en ejecucion por PIPELINE
-#
-# `%pip install` esta DESHABILITADO cuando un notebook se ejecuta desde un
-# Data Pipeline: solo funciona en sesiones interactivas. Verificado en Fabric:
-#   MagicUsageError: %pip magic command is disabled
-#
-# Por eso la primera celda de cada notebook NO instala nada. El paquete se
-# resuelve por una de estas dos vias, ambas compatibles con pipeline:
-#
-#   A) Carpeta en Files (rapida, sin publicar entorno). Subir la carpeta
-#      `kanrec/` a Files/libs/ y anadir al inicio del notebook:
-#
-#          import sys
-#          sys.path.insert(0, "/lakehouse/default/Files/libs")
-#
-#   B) Entorno de Fabric (la via formal). Workspace -> Nuevo -> Entorno ->
-#      Bibliotecas personalizadas -> subir kanrec-0.3.2-py3-none-any.whl ->
-#      Publicar -> asignar el entorno al workspace o al notebook.
-#
-# Las dependencias (torch, scipy, scikit-learn, pandas, pyarrow) ya vienen en
-# el runtime de Fabric, asi que ninguna de las dos vias necesita resolverlas.
-# ---------------------------------------------------------------------------
 import json
 import os
 import time
@@ -122,7 +45,7 @@ from pyspark.sql import functions as F
 # 01 reescribio las tablas ('overwrite') en la misma capacidad de Fabric,
 # esta sesion podia seguir viendo el esquema/datos anteriores en cache y
 # entrenar sobre la tabla vieja SIN normalizar (rango I6 hasta ~12000 en vez
-# de ~[-3,3]), produciendo curvas espuriamente lineales. Verificado: era la
+# de ~[-3,3]), produciendo curvas espuriamente lineales. Era la
 # causa de que 04_trial diera el mismo AUC pese a haber reejecutado 01.
 for _t in ("train", "val", "test"):
     spark.catalog.refreshTable(_t)
@@ -191,7 +114,7 @@ class CriteoDatasetSmall(Dataset):
 
 
 # Escala deliberadamente pequena: suficiente para que el pipeline se
-# ejercite de verdad y las metricas tengan sentido, sin arriesgar la
+# se ejercite completo y las metricas tengan sentido, sin arriesgar la
 # sesion. Sube estos numeros solo si tu capacidad no es la trial.
 N_TRAIN, N_VAL, N_TEST = 40_000, 8_000, 8_000
 SEED_FOR_SAMPLING = 42
@@ -225,7 +148,7 @@ def evaluate(model, loader) -> tuple[float, float]:
 # Learning rate por encoder (mismo criterio que la version completa de
 # Colab): con lr=1e-3 igual para los tres, AutoDis queda infraentrenado
 # incluso a 30 epocas por su capa de discretizacion mas parametrizada.
-# Verificado empiricamente antes de entregar este notebook.
+# Comprobado empiricamente.
 DEFAULT_LR = {"raw": 1e-3, "autodis": 1e-2, "kan-bspline": 1e-3}
 
 
