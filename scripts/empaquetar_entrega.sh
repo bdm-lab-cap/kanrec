@@ -1,13 +1,13 @@
 #!/bin/bash
 # Empaqueta el entregable final del TFM segun la guia del master.
 #
-# Produce Pedro_Martinez_Sanchez_TFM.zip con la estructura que pide la guia:
-# memoria, anexos, codigo fuente y referencia al repositorio.
+# Produce Pedro_Antonio_Martinez_Sanchez_TFM.zip con la estructura que pide
+# la guia: memoria, anexos, codigo fuente y referencia al repositorio.
 #
 # Uso:  bash scripts/empaquetar_entrega.sh
 set -e
 
-NOMBRE="Pedro_Martinez_Sanchez_TFM"
+NOMBRE="Pedro_Antonio_Martinez_Sanchez_TFM"
 RAIZ="$(cd "$(dirname "$0")/.." && pwd)"
 SALIDA="$RAIZ/entrega"
 REPO_URL="https://github.com/bdm-lab-cap/kanrec"
@@ -17,20 +17,20 @@ rm -rf "$SALIDA" "$RAIZ/$NOMBRE.zip"
 mkdir -p "$SALIDA"/{memoria,codigo,resultados}
 
 # ── 1. Memoria y anexos ────────────────────────────────────────────────────
+# Los documentos no se versionan (ver .gitignore): se indican por variable de
+# entorno o se colocan en una carpeta documentos/ junto al repositorio.
 echo "  memoria y anexos..."
-for f in "Memoria_TFM_KAN-REC.docx" "Anexos_TFM_KAN-REC.docx"; do
-    if [ -f "$RAIZ/docs/$f" ]; then
-        cp "$RAIZ/docs/$f" "$SALIDA/memoria/"
-    else
-        echo "    AVISO: falta docs/$f"
-    fi
+DOCS="${DOCS_DIR:-$RAIZ/../documentos}"
+ENCONTRADOS=0
+for f in "$DOCS"/Memoria_TFM_KAN-REC*.docx "$DOCS"/Anexos_TFM_KAN-REC*.docx; do
+    [ -f "$f" ] && { cp "$f" "$SALIDA/memoria/"; ENCONTRADOS=$((ENCONTRADOS+1)); }
 done
-cp "$RAIZ/docs/MEMORIA_TFM_KAN-REC.md" "$SALIDA/memoria/" 2>/dev/null || true
-cp "$RAIZ/docs/ANEXOS_TFM_KAN-REC.md"  "$SALIDA/memoria/" 2>/dev/null || true
+[ "$ENCONTRADOS" -eq 0 ] && echo "    AVISO: no se encontraron los .docx en $DOCS (usa DOCS_DIR=...)"
+
 
 # ── 2. Codigo fuente ───────────────────────────────────────────────────────
 echo "  codigo..."
-for d in kanrec tests fabric colab experiments powerbi data infra scripts; do
+for d in kanrec tests fabric colab experiments powerbi data infra scripts config; do
     [ -d "$RAIZ/$d" ] && cp -r "$RAIZ/$d" "$SALIDA/codigo/"
 done
 for f in setup.py pytest.ini README.md SECURITY.md .github; do
@@ -49,10 +49,7 @@ find "$SALIDA/codigo" -name ".env" -delete 2>/dev/null || true
 
 # ── 3. Resultados (las cifras que sustentan la memoria) ────────────────────
 echo "  resultados..."
-for f in "$RAIZ"/docs/*.png; do [ -f "$f" ] && cp "$f" "$SALIDA/resultados/"; done
-for f in "$RAIZ"/resultados/*.csv "$RAIZ"/resultados/*.json; do
-    [ -f "$f" ] && cp "$f" "$SALIDA/resultados/"
-done
+for f in "$RAIZ"/resultados/*; do [ -f "$f" ] && cp "$f" "$SALIDA/resultados/"; done
 
 # ── 4. Indice del entregable ───────────────────────────────────────────────
 cat > "$SALIDA/LEEME.md" << EOF
@@ -71,18 +68,18 @@ $REPO_URL
 
     memoria/      Memoria (20 caras) y anexos A-F, en .docx y .md
     codigo/       Paquete kanrec, notebooks de Fabric y Colab, tests
-    resultados/   Figuras y CSV con las cifras que sustentan la memoria
+    resultados/   Datos y figuras que sustentan cada cifra de la memoria
 
 ## Reproducción
 
     cd codigo
     python -m venv .venv && source .venv/bin/activate
     pip install -e ".[dev,train]"
-    pytest tests/ -q                    # 105 tests
+    pytest tests/ -q                    # 145 tests
 
 Los experimentos se reproducen con los notebooks de \`fabric/\` y \`colab/\`.
-El orden de ejecución en Fabric y la configuración del pipeline están en
-\`codigo/fabric/PIPELINE_README.md\`.
+El orden de ejecución y la definición del pipeline están en
+\`codigo/fabric/pipeline_kanrec_end_to_end.json\` y en el anexo C.5.
 
 ## Nota sobre los datos
 
@@ -107,14 +104,17 @@ if grep -rlqs "mongodb+srv://[^<$]" "$SALIDA/codigo" \
          --exclude="empaquetar_entrega.sh" 2>/dev/null | sed 's/^/    /'
     FALLOS=1
 fi
-if [ ! -f "$SALIDA/memoria/Memoria_TFM_KAN-REC.docx" ]; then
+if ! ls "$SALIDA/memoria"/Memoria_TFM_KAN-REC*.docx >/dev/null 2>&1; then
     echo "  ERROR: falta la memoria en .docx"; FALLOS=1
+fi
+if ! ls "$SALIDA/memoria"/Anexos_TFM_KAN-REC*.docx >/dev/null 2>&1; then
+    echo "  ERROR: faltan los anexos en .docx"; FALLOS=1
 fi
 if [ ! -f "$SALIDA/codigo/requirements.lock" ]; then
     echo "  AVISO: falta requirements.lock (ejecuta: pip freeze > requirements.lock)"
 fi
-if ! ls "$SALIDA/resultados"/*.png >/dev/null 2>&1; then
-    echo "  AVISO: no hay figuras en resultados/"
+if ! ls "$SALIDA/resultados"/*.csv >/dev/null 2>&1; then
+    echo "  AVISO: no hay datos en resultados/"
 fi
 
 [ "$FALLOS" -eq 1 ] && { echo ""; echo "Corrige los ERROR antes de entregar."; exit 1; }

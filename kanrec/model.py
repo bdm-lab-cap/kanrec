@@ -79,10 +79,10 @@ class CTRModel(nn.Module):
 
         self.numerical_encoder = numerical_encoder
 
-        # NOTE (pendiente): padding_idx=0 zeroes out whichever
-        # category Spark's StringIndexer assigned index 0 to — the *most
-        # frequent* category, not a padding token. Affects all encoders
-        # equally, so comparisons stay fair; left for a later pass.
+        # padding_idx=0 anula el embedding de la categoria con indice 0, que
+        # con el indexado por frecuencia descendente es la MAS frecuente, no un
+        # token de relleno. Afecta por igual a los tres encoders, de modo que la
+        # comparativa sigue siendo valida; queda pendiente de revision.
         self.cat_embeddings = nn.ModuleList([
             nn.Embedding(card + 1, embedding_dim, padding_idx=0)
             for card in cat_cardinalities

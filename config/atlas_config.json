@@ -1,4 +1,4 @@
 {
-  "atlas_uri": "mongodb+srv://USUARIO:CONTRASENA_NUEVA@clusterkanrec.wnwt3ze.mongodb.net/?appName=ClusterKanrec",
-  "_nota": "Plantilla. Sustituir por la credencial ROTADA. Este fichero vive en Files/config/ del lakehouse"
+  "atlas_uri": "mongodb+srv://<usuario>:<contrasena>@<cluster>.mongodb.net/?appName=ClusterKanrec",
+  "_nota": "Plantilla. La credencial real se resuelve con kanrec.config.atlas_uri() desde Azure Key Vault ('atlas-uri'), variable de entorno ATLAS_URI o este fichero en Files/config/ del lakehouse. Nunca se versiona con valores reales."
 }

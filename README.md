@@ -88,21 +88,26 @@ del propio modelo, que reproduce la forma con un 6 % de error.
 
 ### Coste de la interpretabilidad
 
-El perfilado mostró que el encoder consumía el 84,5 % del tiempo de inferencia,
+El perfilado mostró que el encoder consumía el 82,8 % del tiempo de inferencia,
 no por el coste de evaluar las splines sino porque el forward recorría los trece
-campos en un bucle de Python. Vectorizado en una única operación matricial:
+campos en un bucle de Python. Vectorizado en una única operación matricial
+(GPU T4, lote de 4.096, media de 100 ejecuciones):
 
 | | Original | Vectorizado | Mejora |
 |---|---|---|---|
-| Encoder numérico | 8,83 ms | 0,95 ms | 9,27× |
-| Modelo completo | 10,45 ms | 2,68 ms | 3,89× |
-| Tiempo en el encoder | 84,5 % | 35,5 % | — |
+| Encoder numérico | 9,53 ms | 0,92 ms | 10,39× |
+| Modelo completo | 11,52 ms | 2,20 ms | 5,24× |
+| Tiempo en el encoder | 82,8 % | 41,8 % | — |
+
+La baseline de normalización directa recorre los campos en el mismo bucle, así
+que se vectoriza con el mismo criterio: con ambos encoders optimizados, el
+sobrecoste de KAN-REC es **1,48×**, y sigue siendo **2,08×** más rápido que
+AutoDis.
 
 `kanrec.vectorized` copia los pesos del encoder entrenado, de modo que la
-optimización cambia la velocidad y nunca el modelo. La equivalencia se verifica
-en los tests unitarios y se mide sobre el checkpoint real con
-`experiments/latency_report.py`, que compara ambas baselines vectorizadas para
-que el sobrecoste reportado sea el del método y no el del bucle.
+optimización cambia la velocidad y nunca el modelo. `experiments/latency_report.py`
+lo verifica con `torch.equal` sobre el checkpoint real: la salida del encoder KAN
+es idéntica bit a bit. Datos completos en `resultados/latency_v040.json`.
 
 ---
 
