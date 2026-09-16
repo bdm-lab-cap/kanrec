@@ -11,7 +11,7 @@ fichero `.env` local.
 
 | Nombre | Uso | Origen en Fabric |
 |---|---|---|
-| `ATLAS_URI` | MongoDB Atlas (symbolic store, vector search) | Key Vault `atlas-uri` |
+| `ATLAS_URI` | MongoDB Atlas (store de resultados simbólicos) | Key Vault `atlas-uri` |
 | `CONFLUENT_BOOTSTRAP` | Broker de Confluent Cloud | Key Vault `confluent-bootstrap` |
 | `CONFLUENT_API_KEY` | Autenticación SASL | Key Vault `confluent-api-key` |
 | `CONFLUENT_API_SECRET` | Autenticación SASL | Key Vault `confluent-api-secret` |

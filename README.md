@@ -127,7 +127,7 @@ que el sobrecoste reportado sea el del método y no el del bucle.
 │                             normaliza (misma función que 01)          │
 │                             → puntúa con el checkpoint verificado     │
 │                             → deriva por campo (PSI + cobertura)      │
-│  09_mongodb_vector_search embeddings KAN → Atlas $vectorSearch        │
+│  09_mongodb_persistence   fórmulas φⱼ → Atlas (esquema y stability)  │
 │                                                                       │
 │  Eventstream · Lakehouse sobre OneLake · Data Pipelines               │
 │  Power BI (Direct Lake, 4 páginas) · Activator (alertas)              │
@@ -135,7 +135,7 @@ que el sobrecoste reportado sea el del método y no el del bucle.
           ▼
 ┌──────────────────────────┐   ┌──────────────────────────────────────┐
 │  Google Colab (GPU T4)   │   │  MongoDB Atlas                       │
-│  comparativa a 1,5 M     │   │  symbolic_results · item_embeddings  │
+│  comparativa a 1,5 M     │   │  symbolic_results · model_alerts     │
 └──────────────────────────┘   └──────────────────────────────────────┘
 ```
 
@@ -187,7 +187,7 @@ el contexto de entrenamiento para cargarlo.
 | Feature store | OneLake + Delta Lake | Diseño de ingesta |
 | Arquitectura multi-fuente | Microsoft Fabric | Arquitecturas de datos |
 | Orquestación cloud | Fabric Data Pipelines | Pipelines cloud |
-| Store simbólico + Vector Search | MongoDB Atlas | NoSQL |
+| Store simbólico consultable | MongoDB Atlas | NoSQL |
 | Modelado de tablas Delta | Esquemas Delta | Modelado de datos |
 | Seguimiento de experimentos | Fabric ML Experiments | Machine Learning |
 | CI/CD + empaquetado | GitHub Actions + wheel | Productivización |

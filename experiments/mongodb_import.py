@@ -9,7 +9,7 @@ The connection string is never stored in this file: it is resolved by
 ``kanrec.config`` from Azure Key Vault, the environment or ``.env``.
 
 MongoDB Atlas cluster: ClusterKanrec (M0 free)
-Collections: symbolic_results, model_alerts, item_embeddings
+Collections: symbolic_results, model_alerts
 """
 import json
 from datetime import datetime, timezone
@@ -101,7 +101,7 @@ if __name__ == "__main__":
         print("data/symbolic_results.json not found — download from Fabric Files/results/")
 
     print(f"\nTotal documents:")
-    for col_name in ["symbolic_results", "model_alerts", "item_embeddings"]:
+    for col_name in ["symbolic_results", "model_alerts"]:
         count = client["kanrec"][col_name].count_documents({})
         print(f"  kanrec.{col_name}: {count:,}")
 
