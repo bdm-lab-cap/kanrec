@@ -3,8 +3,8 @@ Baseline numerical encoders and the model factory that builds every model
 compared in this thesis (raw normalisation, AutoDis, KAN-REC) around the
 same InteractionMLP backbone and prediction head.
 
-Corregido en la revisión de septiembre de 2026
---------------------------------------------------------------
+Nota de implementación sobre AutoDis
+------------------------------------
 The previous AutoDis implementation applied a sigmoid to the per-bucket
 logits *before* the softmax:
 

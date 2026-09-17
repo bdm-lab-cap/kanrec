@@ -14,7 +14,7 @@ from kanrec.encoder import KANNumericalEncoder
 from kanrec.model import CTRModel, KANRecModel
 
 
-# ── A3: el grid de las B-splines debe calibrarse a los datos reales ────────
+# ── El grid de las B-splines debe calibrarse a los datos reales ────────────
 
 class TestGridCalibration:
     def test_uncalibrated_grid_is_the_library_default(self):
@@ -26,7 +26,7 @@ class TestGridCalibration:
 
     def test_calibrate_adapts_grid_to_unnormalised_field(self):
         """
-        This is the exact failure mode from la revisión: an unnormalised
+        This is the exact failure mode that motivated the fix: an unnormalised
         field (e.g. Criteo's I6-I13, in the hundreds or thousands) must end
         up with a grid that actually covers its values, or the spline term
         is zero almost everywhere and the encoder degenerates to base_weight * SiLU(x).
@@ -47,7 +47,7 @@ class TestGridCalibration:
 
     def test_spline_can_receive_gradient_after_calibration(self):
         """
-        Antes de A3: para un punto fuera de [-1, 1], todas las funciones
+        Sin calibrar: para un punto fuera de [-1, 1], todas las funciones
         base del spline valen exactamente 0 (ver `b_splines`), así que
         `spline_weight.grad` era 0 sin importar cuánto se entrenara — el
         spline era literalmente incapaz de aprender nada sobre ese valor.
@@ -147,7 +147,7 @@ class TestGridCalibration:
 
     def test_get_spline_curves_evaluates_within_calibrated_range(self):
         """
-        Hallazgo A3: evaluar en un rango fijo [-3, 3] cuando el grid real
+        Evaluar en un rango fijo [-3, 3] cuando el grid real
         cubre, por ejemplo, [-1700, 1800], solo muestra la rama SiLU y
         explica el resultado espurio de que 'exp domina en todos los campos'.
         """
@@ -164,7 +164,7 @@ class TestGridCalibration:
         assert x_grid.max().item() > 10, "sigue evaluando en una ventana fija pequeña"
 
 
-# ── A6: la regularización de entropía debe ser > 0 ──────────────────────────
+# ── La regularización de entropía debe ser > 0 ─────────────────────────────
 
 class TestEntropyRegularization:
     def test_encoder_entropy_regularization_is_positive(self):
@@ -204,7 +204,7 @@ class TestEntropyRegularization:
         assert norms[0] == pytest.approx(expected, rel=1e-6)
 
 
-# ── A5: AutoDis sin el sigmoid antes del softmax ────────────────────────────
+# ── AutoDis sin el sigmoid antes del softmax ───────────────────────────────
 
 class TestAutoDisFix:
     def test_attention_is_not_bounded_by_sigmoid_ratio(self):

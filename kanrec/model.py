@@ -96,7 +96,7 @@ class CTRModel(nn.Module):
         )
 
         # La cabeza devuelve LOGITS, no probabilidades. La Sigmoid se quito
-        # de aqui (la revisión, y causa raiz de un device-side assert en GPU):
+        # de aqui: era la causa raiz de un device-side assert en GPU.
         # Sigmoid + BCELoss puede saturar a pred=0.0 o 1.0 exactos en float32,
         # y entonces BCELoss calcula log(0)=-inf, que en CUDA es un assert
         # fatal (en CPU solo daba inf y seguia, por eso no fallaba localmente).
@@ -160,15 +160,10 @@ class KANRecModel(CTRModel):
         )
         # Entropy regularisation weight (promotes spline sparsity -> more
         # faithful symbolic extraction). See encoder.entropy_regularization_loss
-        # for the fix to the bug that made this always contribute zero
-        #.
+        # for the fix to the bug that made this always contribute zero.
         #
-        # 1e-5, not 1e-3: at 1e-3 the penalty
-        # crushes the spline path. Measured on a synthetic sin(2.5x) signal,
-        # |base_weight| / |spline_weight| after 40 epochs was 63x at 1e-3
-        # versus 16x at 1e-5 -- i.e. the regulariser was suppressing the
-        # very component this thesis is about. Ironically the A6 bug (which
-        # made the term always exactly 0.0) was hiding this.
+        # 1e-5 rather than 1e-3: at 1e-3 the penalty crushes the spline path
+        # and suppresses the very component this thesis is about (see 6.4).
         self.entropy_reg_weight = 1e-5
 
     def parameter_groups(self, base_lr: float = 1e-3, spline_lr_mult: float = 25.0) -> list[dict]:

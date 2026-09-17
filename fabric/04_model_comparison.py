@@ -211,8 +211,8 @@ def train_one_run(
         # corrida real en Fabric: I6 e I12 llegan a ~690 desviaciones tipicas
         # en Criteo -- colas extremas). Con solo ~5k-10k filas de muestra la
         # probabilidad de capturar esos outliers era baja, y el grid
-        # calibrado podia dejarlos fuera de cobertura (el mismo problema del
-        # la revisión, para esas pocas filas concretas). Acumular por FILAS
+        # calibrado podia dejarlos fuera de cobertura, el mismo fallo de
+        # calibracion pero limitado a esas pocas filas. Acumular por FILAS
         # en vez de por numero de lotes es ademas robusto a que cada script
         # use un batch_size distinto.
         CALIB_ROWS = 50_000

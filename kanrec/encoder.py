@@ -12,8 +12,8 @@ Unlike AutoDis (KDD 2021), this encoder:
     on `monotone_fields` below)
   - Produces directly plottable curves (see get_spline_curves)
 
-Corregido en la revisión de septiembre de 2026
-------------------------------------------------------------
+Por qué `calibrate()` es necesario
+----------------------------------
 efficient-kan's B-spline grid defaults to ``[-1, 1]``. Outside that range
 every basis function is exactly zero, so the spline term of the encoder
 vanishes and ``forward`` degenerates to ``base_weight · SiLU(x)`` — a plain
@@ -94,20 +94,11 @@ class KANNumericalEncoder(nn.Module):
         Returns:
             embeddings: [batch, num_fields, embedding_dim]
         """
-        # Winsorizado de la entrada (medido en la corrida de
-        # Colab): tras StandardScaler, Criteo conserva outliers de hasta ~690
-        # desviaciones tipicas en I6/I12. La ruta base del KAN es
-        # base_weight * SiLU(x), y SiLU(690) ~= 690, asi que un solo outlier
-        # arrastra el embedding a magnitud ~1e2-1e3. Con grid_size>=10 eso
-        # basta para que los logits desborden float32 en GPU y todas las
-        # predicciones salgan inf (AUC 0.5, logloss inf). Medido: sin clip
-        # |emb|max = 6.9e2; con clip = 1.0e1, dos ordenes de magnitud menos.
-        #
-        # +-10 sigmas conserva el 99.99% de los datos intacto (una normal
-        # supera 10 sigmas con probabilidad ~1e-23): solo se recortan los
-        # outliers patologicos, que es exactamente la practica estandar de
-        # winsorizado en CTR. No afecta a los baselines: viven fuera de
-        # este encoder.
+        # Winsorizado de la entrada. Tras estandarizar, Criteo conserva
+        # outliers de hasta ~690 desviaciones tipicas en I6 e I12, y la ruta
+        # base SiLU(x) los propaga al embedding hasta desbordar float32 en
+        # GPU. El recorte a +-10 sigmas deja intacto el 99,99% de los datos
+        # (ver memoria, 5.2). No afecta a los baselines, que viven fuera.
         x = x.clamp(-self.input_clip, self.input_clip)
 
         embeddings = []
